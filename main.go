@@ -13,20 +13,11 @@ import (
 	"github.com/hajimehoshi/ebiten/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/sqweek/dialog"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 )
-
-const (
-	defaultSettingsFile  = "screen-ebi-config.json"
-	defaultOutputFileMp4 = "capture.mp4"
-	defaultOutputFileGif = "capture.gif"
-	defaultOutputFilePng = "capture.png"
-)
-
-// TODO: cli arg: settingsFilename
-// TODO: keybindings
-// TODO: screen capture
 
 type Game struct {
 	tickCounter int
@@ -37,6 +28,7 @@ type Game struct {
 	scrp ScreenPrint
 
 	settingFilename string
+	outputFilename  string
 	settings        Settings
 
 	err error
@@ -45,65 +37,15 @@ type Game struct {
 	WindowHeight int
 
 	windowSizeChanged bool
-}
+	capturing         bool
 
-type Rect struct {
-	X int
-	Y int
-	W int
-	H int
-}
-
-type OutputType int
-
-const (
-	OutputTypeMp4 OutputType = iota
-	OutputTypeGif
-	OutputTypePng
-)
-
-type OutputMethod int
-
-const (
-	OutputMethodNewFile = iota
-	OutputMethodAbort
-	OutputMethodOverwrite
-)
-
-type Settings struct {
-	OutputFilename string       `json:"outputFilename"`
-	OutputType     OutputType   `json:"outputType"`
-	OutputMethod   OutputMethod `json:"outputMethod"`
-
-	WindowRect Rect `json:"windowRect"`
-}
-
-func (otype OutputType) String() string {
-	switch otype {
-	case OutputTypeMp4:
-		return "mp4"
-	case OutputTypeGif:
-		return "gif"
-	case OutputTypePng:
-		return "png"
-	}
-	return "invalid-output-type"
-}
-
-func (method OutputMethod) String() string {
-	switch method {
-	case OutputMethodAbort:
-		return "abort"
-	case OutputMethodNewFile:
-		return "new file"
-	case OutputMethodOverwrite:
-		return "overwrite"
-	}
-	return "invalid-output-method"
+	capturer Capturer
 }
 
 func (g *Game) Update() error {
 	g.tickCounter++
+
+	g.updateCapture()
 
 	if g.windowSizeChanged && g.tickCounter%50 == 0 { // throttle by 50 frames
 		g.onWindowSizeChange()
@@ -112,6 +54,39 @@ func (g *Game) Update() error {
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) {
 		os.Exit(0)
 	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyF5) {
+		filter := g.settings.OutputType.String()
+		filename, err := dialog.File().
+			Filter(filter, filter).
+			SetStartFile(g.outputFilename).
+			Save()
+		if err != nil && err != dialog.ErrCancelled {
+			g.setError(err)
+		} else if filename != "" {
+			g.settings.OutputFilename = filename
+			g.saveSettings()
+		}
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyF8) {
+		s := &g.settings
+		s.OutputType = (s.OutputType + 1) % OutputType_Size
+		s.OutputFilename, _ = TrimExt(s.OutputFilename)
+		s.OutputFilename = s.OutputFilename + "." + s.OutputType.String()
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyF9) {
+		ebiten.SetWindowDecorated(!ebiten.IsWindowDecorated())
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyF12) {
+		s := &g.settings
+		s.OutputMethod = (s.OutputMethod + 1) % OutputMethod_Size
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+		g.startCapture()
+	}
+
 	return nil
 }
 
@@ -122,7 +97,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	ebitenutil.DebugPrint(screen, "Hello, World!")
 
 	sw, sh := float64(b.Dx()-1), float64(b.Dy()-1)
-	color1 := color.RGBA{0, 255, 255, 255}
+	color1 := ColorTeal
 	//color2 := color.RGBA{0, 40, 0, 255}
 
 	ebitenutil.DrawRect(screen, 0, 0, sw, sh, color.RGBA{0, 0, 0, 150})
@@ -148,26 +123,22 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	g.scrp.AlignX = 0b10
 	g.scrp.Font = g.smallFont
-	g.scrp.Printf("Output file [F5]: %v", g.settings.OutputFilename)
+	g.scrp.Printf("Output file [F5]: %v", g.outputFilename)
 	g.scrp.Printf("Output type [F8]: %v", g.settings.OutputType)
 	g.scrp.Printf("Output method [F12]: %v", g.settings.OutputMethod)
 
-	g.scrp.Color = color1
-	g.scrp.Font = g.regularFont
-	g.scrp.AlignX = 0b11
-	g.scrp.Printf("\n\n\nStatus: %v\n", "ready")
-
-	g.scrp.AlignX = 0b11
-	g.scrp.Color = color.White
-	g.scrp.Font = g.regularFont
-	g.scrp.Printf("Press [enter] to start")
+	if g.capturer != nil {
+		g.capturer.Draw(screen)
+	}
 
 	g.scrp.Println("\n\n\n\n\n")
-	g.scrp.Println("Resize and position this window to the area ")
+	g.scrp.Font = g.smallFont
+	g.scrp.Println("Resize and position\nthis window to the area ")
 	g.scrp.Println("where you want to capture.")
 
 	g.scrp.Font = g.smallFont
 	g.scrp.PrintAt(0b0101, "some text here")
+
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -182,19 +153,8 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeigh
 }
 
 func (g *Game) Init() {
-	w, h := ebiten.ScreenSizeInFullscreen()
 	g.settingFilename = defaultSettingsFile
-	g.settings = Settings{
-		OutputFilename: defaultOutputFileMp4,
-		OutputType:     OutputTypeMp4,
-		OutputMethod:   OutputMethodNewFile,
-		WindowRect: Rect{
-			X: 0,
-			Y: 0,
-			W: w,
-			H: h,
-		},
-	}
+
 	g.loadSettings()
 
 	wr := g.settings.WindowRect
@@ -211,6 +171,24 @@ func (g *Game) Init() {
 }
 
 func (g *Game) loadSettings() {
+	w, h := ebiten.ScreenSizeInFullscreen()
+	g.settings = Settings{
+		OutputFilename: defaultOutputFileMp4,
+		OutputType:     OutputTypeMp4,
+		OutputMethod:   OutputMethodNewFile,
+		WindowRect: Rect{
+			X: 0,
+			Y: 0,
+			W: w,
+			H: h,
+		},
+	}
+	g.outputFilename = g.getNextOutFilename()
+
+	if os.Getenv("screenebi_config") != "" {
+		g.settingFilename = os.Getenv("screenebi_config")
+	}
+
 	file, err := os.Open(g.settingFilename)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -227,6 +205,21 @@ func (g *Game) loadSettings() {
 		g.setError(err)
 		return
 	}
+
+	if g.settings.OutputFilename == "" {
+		filename := ""
+		switch g.settings.OutputType {
+		case OutputTypeMp4:
+			filename = defaultOutputFileMp4
+		case OutputTypeGif:
+			filename = defaultOutputFileGif
+		case OutputTypePng:
+			filename = defaultOutputFilePng
+		}
+		g.settings.OutputFilename = filename
+	}
+
+	g.outputFilename = g.getNextOutFilename()
 }
 
 func (g *Game) saveSettings() {
@@ -277,21 +270,78 @@ func (g *Game) setError(err error) {
 	println("error:", err.Error())
 	debug.PrintStack()
 }
+
 func (g *Game) onWindowSizeChange() {
 	println("window size changed")
+
+	wr := &g.settings.WindowRect
+	wr.X, wr.Y = ebiten.WindowPosition()
+	wr.W, wr.H = ebiten.WindowSize()
+
 	g.saveSettings()
 
 	g.windowSizeChanged = false
 }
 
+func (g *Game) getNextOutFilename() string {
+	outputFilename := g.settings.OutputFilename
+	if g.settings.OutputMethod != OutputMethodNewFile {
+		return outputFilename
+	}
+	_, err := os.Stat(outputFilename)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			g.logError(err)
+		}
+		return outputFilename
+	}
+
+	return IncrementFilename(outputFilename)
+}
+
+func (g *Game) logError(err error) {
+	log.Println(err)
+	debug.PrintStack()
+}
+
+func (g *Game) updateCaptureGif() {
+	if g.captureGif != nil {
+		g.captureGif.Screenshot()
+	}
+}
+
+func (g *Game) updateCapture() {
+	if !g.capturing {
+		return
+	}
+
+	if g.settings.OutputType == OutputTypeGif {
+		g.updateCaptureGif()
+	}
+}
+
+func (g *Game) startCapture() {
+	if g.settings.OutputType == OutputTypeGif {
+		capturer := NewGifCapturer()
+		x, y := ebiten.WindowPosition()
+		w, h := ebiten.WindowSize()
+		capturer.SetBounds(x, y, w, h)
+		g.capturer = capturer
+	}
+
+	g.capturing = true
+}
+
 func main() {
 
+	//ebiten.SetRunnableOnUnfocused(false)
 	ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
+
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowDecorated(false)
 	ebiten.SetScreenTransparent(true)
 	ebiten.SetWindowSize(640, 480)
-	ebiten.SetWindowTitle("Hello, World!")
+	ebiten.SetWindowTitle("screen capture")
 
 	game := &Game{}
 	game.Init()
@@ -300,3 +350,27 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+/*
+
+TODO:
+
+interface Capturer {
+	Start()
+	Update()
+	StopAndSave()
+}
+
+type GifCapturer struct {}
+type PngCapturer struct {}
+
+*/
+
+// TODO: keybindings, save settings on press
+// TODO: option to show window frame,
+//       since some OS doesn't have keyshortcuts for moving/resizing windows
+
+// https://github.com/kbinani/screenshot
+// https://pkg.go.dev/image/gif#EncodeAll
+// use to get pallete from rgba
+// https://github.com/ericpauley/go-quantize/

@@ -82,7 +82,7 @@ func (scrp *ScreenPrint) PrintAt(align byte, str string) {
 	if align&0b11 == 0b11 {
 		scrp.currentY = imageB.Dy()/2 - textB.Dy()/2
 	} else if align&0b01 == 0b01 {
-		scrp.currentY = imageB.Dy() - int(float64(textB.Dy())*2.5) - scrp.Border/2
+		scrp.currentY = imageB.Dy() - int(float64(textB.Dy())*2.0) - scrp.Border/2
 	}
 
 	scrp.Println(str)
