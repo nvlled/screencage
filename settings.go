@@ -14,20 +14,24 @@ const (
 	defaultOutputFilePng = "capture.png"
 )
 
+const defaultFPS = 5
+
+const defaultOutputType = OutputTypeGif
+
 type OutputType int
 
 const (
-	OutputTypeMp4 OutputType = iota
-	OutputTypeGif
+	OutputTypeGif OutputType = iota
 	OutputTypePng
+
+	// TODO:
+	//OutputTypeMp4
 
 	OutputType_Size
 )
 
 func (otype OutputType) String() string {
 	switch otype {
-	case OutputTypeMp4:
-		return "mp4"
 	case OutputTypeGif:
 		return "gif"
 	case OutputTypePng:
@@ -50,7 +54,7 @@ func (method OutputMethod) String() string {
 	case OutputMethodNewFile:
 		return "new file"
 	case OutputMethodOverwrite:
-		return "overwrite"
+		return "overwrite existing file"
 	}
 	return "invalid-output-method"
 }
@@ -76,4 +80,8 @@ type Settings struct {
 	CaptureRate CaptureRate
 
 	WindowRect Rect `json:"windowRect"`
+
+	HideOnCapture bool `json:"HideOnCapture"`
+
+	FPS uint8 `json:"FPS"`
 }

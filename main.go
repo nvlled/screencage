@@ -19,13 +19,19 @@ import (
 	"golang.org/x/image/font/opentype"
 )
 
+var lightBorderImage *ebiten.Image
+var darkBorderImage *ebiten.Image
+
+var WindowTitle = "screen capture"
+
 type Game struct {
 	tickCounter int
 
 	regularFont font.Face
 	smallFont   font.Face
+	tinyFont    font.Face
 
-	scrp ScreenPrint
+	scrp *ScreenPrint
 
 	settingFilename string
 	outputFilename  string
@@ -33,26 +39,39 @@ type Game struct {
 
 	err error
 
-	WindowWidth  int
-	WindowHeight int
+	mustSaveSettings bool
 
-	windowSizeChanged bool
-	capturing         bool
+	capturer    Capturer
+	gifCapturer *GifCapturer
 
-	capturer Capturer
+	borderOnly  bool
+	borderLight color.Color
+	borderDark  color.Color
+}
+
+func NewGame() *Game {
+	game := &Game{
+		borderLight: ColorBlue,
+		borderDark:  ColorBlueDark,
+		scrp:        NewScreenPrint(),
+	}
+	game.gifCapturer = NewGifCapturer(game)
+	return game
 }
 
 func (g *Game) Update() error {
 	g.tickCounter++
 
-	g.updateCapture()
-
-	if g.windowSizeChanged && g.tickCounter%50 == 0 { // throttle by 50 frames
-		g.onWindowSizeChange()
+	if g.mustSaveSettings && g.tickCounter%50 == 0 { // throttle by 50 frames
+		g.onSettingsChanged()
 	}
 
 	if ebiten.IsKeyPressed(ebiten.KeyEscape) {
 		os.Exit(0)
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyF10) {
+		g.borderOnly = !g.borderOnly
 	}
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyF5) {
@@ -65,89 +84,123 @@ func (g *Game) Update() error {
 			g.setError(err)
 		} else if filename != "" {
 			g.settings.OutputFilename = filename
+			g.outputFilename = filename
+			g.setOutputType(g.settings.OutputType)
 			g.saveSettings()
 		}
 	}
 
-	if inpututil.IsKeyJustPressed(ebiten.KeyF8) {
-		s := &g.settings
-		s.OutputType = (s.OutputType + 1) % OutputType_Size
-		s.OutputFilename, _ = TrimExt(s.OutputFilename)
-		s.OutputFilename = s.OutputFilename + "." + s.OutputType.String()
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyF9) {
-		ebiten.SetWindowDecorated(!ebiten.IsWindowDecorated())
-	}
-	if inpututil.IsKeyJustPressed(ebiten.KeyF12) {
-		s := &g.settings
-		s.OutputMethod = (s.OutputMethod + 1) % OutputMethod_Size
+	if g.capturer == nil || !g.capturer.IsRunning() {
+		if inpututil.IsKeyJustPressed(ebiten.KeyF8) {
+			s := &g.settings
+			outputType := (s.OutputType + 1) % OutputType_Size
+			g.setOutputType(outputType)
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyF9) {
+			ebiten.SetWindowDecorated(!ebiten.IsWindowDecorated())
+		}
+		if inpututil.IsKeyJustPressed(ebiten.KeyF12) {
+			s := &g.settings
+			s.OutputMethod = (s.OutputMethod + 1) % OutputMethod_Size
+		}
 	}
 
-	if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-		g.startCapture()
+	if g.capturer != nil {
+		g.capturer.Update()
 	}
 
 	return nil
 }
 
+// TODO:
+//	func drawLineX(screen, dot, x, y, w int) {
+//		op := ebiten.GeoM{}
+//		op.Scale(sw, 1)
+//		screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
+//			GeoM: op,
+//		})
+//	}
+
+func drawLineY(screen, dot, x, y, h int) {
+
+}
+
+func (g *Game) drawBorder(screen *ebiten.Image) {
+	b := screen.Bounds()
+
+	sw, sh := float64(b.Dx()-1), float64(b.Dy()-1)
+
+	op := ebiten.GeoM{}
+	op.Scale(sw, 1)
+	screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
+		GeoM: op,
+	})
+	op.Reset()
+	op.Scale(1, sh)
+	screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
+		GeoM: op,
+	})
+	op.Reset()
+	op.Scale(sw, 1)
+	op.Translate(0, sh-1)
+	screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
+		GeoM: op,
+	})
+}
+
 func (g *Game) Draw(screen *ebiten.Image) {
 	g.scrp.Reset(screen)
 
-	b := screen.Bounds()
-	ebitenutil.DebugPrint(screen, "Hello, World!")
+	if !g.borderOnly {
+		b := screen.Bounds()
+		ebitenutil.DrawRect(screen, 0, 0, float64(b.Dx()), float64(b.Dy()), color.RGBA{0, 0, 0, 150})
+	}
 
-	sw, sh := float64(b.Dx()-1), float64(b.Dy()-1)
-	color1 := ColorTeal
-	//color2 := color.RGBA{0, 40, 0, 255}
-
-	ebitenutil.DrawRect(screen, 0, 0, sw, sh, color.RGBA{0, 0, 0, 150})
-
-	ebitenutil.DrawLine(screen, 0, 0, sw, 0, color1)
-	ebitenutil.DrawLine(screen, 1, 0, 1, sh, color1)
-	ebitenutil.DrawLine(screen, sw, 0, sw, sh, color1)
-	ebitenutil.DrawLine(screen, 0, sh, sw, sh, color1)
-
-	//ebitenutil.DrawLine(screen, 1, 1, sw-1, 1, color2)
-	//ebitenutil.DrawLine(screen, 2, 2, 2, sh-2, color2)
-	//ebitenutil.DrawLine(screen, 2, sh-2, sw-2, sh-2, color2)
-	//ebitenutil.DrawLine(screen, sw-2, 1, sw-2, sh-1, color2)
+	g.drawBorder(screen)
 
 	if g.err != nil {
 		g.scrp.PrintAt(0b1111, g.err.Error())
 		return
 	}
 
-	//msg := "some text here"
-	//textB := text.BoundString(g.font, msg)
-	//text.Draw(screen, msg, g.font, int(sw/2)-textB.Dx()/2-1, int(sh/2)-textB.Dy()/2-1, color1)
+	var infoColor color.Color = ColorWhite
+	if g.capturer != nil && g.capturer.IsRunning() {
+		infoColor = ColorGray
+	}
 
-	g.scrp.AlignX = 0b10
-	g.scrp.Font = g.smallFont
-	g.scrp.Printf("Output file [F5]: %v", g.outputFilename)
-	g.scrp.Printf("Output type [F8]: %v", g.settings.OutputType)
-	g.scrp.Printf("Output method [F12]: %v", g.settings.OutputMethod)
+	if g.settings.WindowRect.H >= 250 && !g.borderOnly {
+		g.scrp.AlignX = 0b10
+		g.scrp.Font = g.tinyFont
+		g.scrp.Color = infoColor
+		g.scrp.PrintColumn(
+			fmt.Sprintf("Output file [F5]: %v", g.outputFilename),
+			"Toggle frame [F9]",
+		)
+		g.scrp.PrintColumn(
+			fmt.Sprintf("Output method [F12]: %v", g.settings.OutputMethod),
+			"Hide [F10]",
+		)
+		g.scrp.Printf("Output file [F5]: %v", g.outputFilename)
+		g.scrp.Println("\n\n\n")
+	}
 
 	if g.capturer != nil {
 		g.capturer.Draw(screen)
 	}
 
-	g.scrp.Println("\n\n\n\n\n")
-	g.scrp.Font = g.smallFont
-	g.scrp.Println("Resize and position\nthis window to the area ")
-	g.scrp.Println("where you want to capture.")
-
-	g.scrp.Font = g.smallFont
-	g.scrp.PrintAt(0b0101, "some text here")
-
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
-	if g.WindowWidth != outsideWidth || g.WindowHeight != outsideHeight {
-		g.windowSizeChanged = true
+	wr := &g.settings.WindowRect
+	x, y := ebiten.WindowPosition()
+
+	if wr.W != outsideWidth || wr.H != outsideHeight || wr.X != x || wr.Y != y {
+		g.mustSaveSettings = true
 	}
 
-	g.WindowWidth = outsideWidth
-	g.WindowHeight = outsideHeight
+	wr.X, wr.Y = x, y
+	wr.W = outsideWidth
+	wr.H = outsideHeight
 
 	return outsideWidth, outsideHeight
 }
@@ -156,6 +209,7 @@ func (g *Game) Init() {
 	g.settingFilename = defaultSettingsFile
 
 	g.loadSettings()
+	g.setOutputType(g.settings.OutputType)
 
 	wr := g.settings.WindowRect
 	ebiten.SetWindowPosition(wr.X, wr.Y)
@@ -172,9 +226,10 @@ func (g *Game) Init() {
 
 func (g *Game) loadSettings() {
 	w, h := ebiten.ScreenSizeInFullscreen()
+	outputType := defaultOutputType
 	g.settings = Settings{
 		OutputFilename: defaultOutputFileMp4,
-		OutputType:     OutputTypeMp4,
+		OutputType:     outputType,
 		OutputMethod:   OutputMethodNewFile,
 		WindowRect: Rect{
 			X: 0,
@@ -182,8 +237,10 @@ func (g *Game) loadSettings() {
 			W: w,
 			H: h,
 		},
+		FPS: defaultFPS,
 	}
-	g.outputFilename = g.getNextOutFilename()
+
+	g.outputFilename = g.settings.OutputFilename
 
 	if os.Getenv("screenebi_config") != "" {
 		g.settingFilename = os.Getenv("screenebi_config")
@@ -209,8 +266,6 @@ func (g *Game) loadSettings() {
 	if g.settings.OutputFilename == "" {
 		filename := ""
 		switch g.settings.OutputType {
-		case OutputTypeMp4:
-			filename = defaultOutputFileMp4
 		case OutputTypeGif:
 			filename = defaultOutputFileGif
 		case OutputTypePng:
@@ -219,7 +274,11 @@ func (g *Game) loadSettings() {
 		g.settings.OutputFilename = filename
 	}
 
-	g.outputFilename = g.getNextOutFilename()
+	g.outputFilename = g.settings.OutputFilename
+}
+
+func (g *Game) scheduleSaveSettings() {
+	g.mustSaveSettings = true
 }
 
 func (g *Game) saveSettings() {
@@ -260,9 +319,17 @@ func (g *Game) loadFonts() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	tinyFont, err := opentype.NewFace(tt, &opentype.FaceOptions{
+		Size: 15,
+		DPI:  dpi,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	g.regularFont = regularFont
 	g.smallFont = smallFont
+	g.tinyFont = tinyFont
 }
 
 func (g *Game) setError(err error) {
@@ -271,16 +338,12 @@ func (g *Game) setError(err error) {
 	debug.PrintStack()
 }
 
-func (g *Game) onWindowSizeChange() {
-	println("window size changed")
-
+func (g *Game) onSettingsChanged() {
+	println("settings changed")
 	wr := &g.settings.WindowRect
-	wr.X, wr.Y = ebiten.WindowPosition()
-	wr.W, wr.H = ebiten.WindowSize()
-
 	g.saveSettings()
-
-	g.windowSizeChanged = false
+	g.mustSaveSettings = false
+	ebiten.SetWindowTitle(fmt.Sprintf("%v %vx%v", WindowTitle, wr.W, wr.H))
 }
 
 func (g *Game) getNextOutFilename() string {
@@ -296,7 +359,9 @@ func (g *Game) getNextOutFilename() string {
 		return outputFilename
 	}
 
-	return IncrementFilename(outputFilename)
+	result := NextLatestIncrementedFilename(outputFilename)
+
+	return result
 }
 
 func (g *Game) logError(err error) {
@@ -304,47 +369,40 @@ func (g *Game) logError(err error) {
 	debug.PrintStack()
 }
 
-func (g *Game) updateCaptureGif() {
-	if g.captureGif != nil {
-		g.captureGif.Screenshot()
-	}
-}
+func (g *Game) setOutputType(outputType OutputType) {
+	s := &g.settings
+	s.OutputType = outputType
+	filename, _ := TrimExt(s.OutputFilename)
+	s.OutputFilename = filename + "." + s.OutputType.String()
+	g.outputFilename = s.OutputFilename
 
-func (g *Game) updateCapture() {
-	if !g.capturing {
-		return
+	switch outputType {
+	case OutputTypeGif:
+		g.capturer = g.gifCapturer
+	default:
+		g.capturer = nil
 	}
-
-	if g.settings.OutputType == OutputTypeGif {
-		g.updateCaptureGif()
-	}
-}
-
-func (g *Game) startCapture() {
-	if g.settings.OutputType == OutputTypeGif {
-		capturer := NewGifCapturer()
-		x, y := ebiten.WindowPosition()
-		w, h := ebiten.WindowSize()
-		capturer.SetBounds(x, y, w, h)
-		g.capturer = capturer
-	}
-
-	g.capturing = true
 }
 
 func main() {
+	//ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
 
-	//ebiten.SetRunnableOnUnfocused(false)
-	ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
-
+	//ebiten.SetWindowFloating(true)
+	ebiten.SetTPS(30)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowDecorated(false)
 	ebiten.SetScreenTransparent(true)
 	ebiten.SetWindowSize(640, 480)
 	ebiten.SetWindowTitle("screen capture")
 
-	game := &Game{}
+	game := NewGame()
 	game.Init()
+
+	lightBorderImage = ebiten.NewImage(1, 1)
+	lightBorderImage.Set(0, 0, game.borderLight)
+
+	darkBorderImage = ebiten.NewImage(1, 1)
+	darkBorderImage.Set(0, 0, game.borderDark)
 
 	if err := ebiten.RunGame(game); err != nil {
 		log.Fatal(err)
@@ -355,22 +413,10 @@ func main() {
 
 TODO:
 
-interface Capturer {
-	Start()
-	Update()
-	StopAndSave()
-}
-
-type GifCapturer struct {}
 type PngCapturer struct {}
 
 */
 
-// TODO: keybindings, save settings on press
-// TODO: option to show window frame,
-//       since some OS doesn't have keyshortcuts for moving/resizing windows
-
-// https://github.com/kbinani/screenshot
-// https://pkg.go.dev/image/gif#EncodeAll
-// use to get pallete from rgba
-// https://github.com/ericpauley/go-quantize/
+// TODO: don't use env for getting cli arguments
+// TODO: fix capturer bounds and border offset
+//       also, I should not use ebitenutil.DrawLine

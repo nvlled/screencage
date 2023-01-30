@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/gif"
 	"os"
 	"sync/atomic"
@@ -10,9 +12,12 @@ import (
 
 	"github.com/ericpauley/go-quantize/quantize"
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
+	"github.com/xyproto/palgen"
 )
 
 const (
@@ -28,19 +33,12 @@ const (
 )
 
 type GifCapturer struct {
-	fps int
-	//rect image.Rectangle
+	saveFilename string
 
-	//state atomic.Int32
+	numImages    int
+	numProcessed int
 
-	//queue chan int
-	//halt  chan struct{}
-
-	//images []*image.RGBA
-	//delays []int
-
-	//lastShot   time.Time
-	//lastUpdate time.Time
+	running atomic.Bool
 
 	draw func(*ebiten.Image)
 
@@ -55,52 +53,10 @@ type GifCapturer struct {
 func NewGifCapturer(game *Game) *GifCapturer {
 	capturer := &GifCapturer{
 		game: game,
-		scrp: &game.scrp,
+		scrp: game.scrp,
 	}
 	capturer.script = carrot.Start(capturer.coroutine)
 	return capturer
-}
-
-/*
-func (capturer *GifCapturer) SetBounds(x, y, w, h int) {
-	r := &capturer.rect
-	r.Min.X = x
-	r.Min.Y = y
-	r.Max.X = x + w
-	r.Max.Y = y + h
-}
-*/
-
-type ScreenShotTask struct {
-	Image *image.RGBA
-	Error error
-	done  atomic.Bool
-
-	CsElapsed int // Cs = Centiseconds
-}
-
-func (task *ScreenShotTask) IsDone() bool {
-	return task.done.Load()
-}
-
-func StartScreenshot(bounds image.Rectangle) Task[GifFrame] {
-	task := Task[GifFrame]{}
-	go func() {
-		startTime := time.Now()
-		img, err := screenshot.CaptureRect(bounds)
-		duration := time.Since(startTime)
-
-		if err != nil {
-			task.Error = err
-		} else {
-			task.Result.Image = img
-			task.Result.CsDelay = int(duration.Abs().Milliseconds()) / 10
-			task.done.Store(true)
-
-		}
-	}()
-
-	return task
 }
 
 type GifFrame struct {
@@ -117,23 +73,39 @@ type Task[T any] struct {
 func (task *Task[T]) Finish()      { task.done.Store(true) }
 func (task *Task[T]) IsDone() bool { return task.done.Load() }
 
-func SaveGif(filename string, frames []GifFrame) Task[carrot.Void] {
-	task := Task[carrot.Void]{}
-	go func() {
-		p := make([]color.Color, 0, 256)
-		gifImage := []*image.Paletted{}
-		q := quantize.MedianCutQuantizer{}
+type Void struct{}
 
+func SaveGif(filename string, frames []GifFrame, onProcessOpt ...func()) *Task[Void] {
+	task := &Task[Void]{}
+	go func() {
+		defer task.Finish()
+
+		gifImage := []*image.Paletted{}
+		quantizer := quantize.MedianCutQuantizer{}
+
+		_ = quantizer
+		_ = palgen.Generate
+
+		onProcess := func() {}
+		if len(onProcessOpt) > 0 {
+			onProcess = onProcessOpt[0]
+		}
+
+		// TODO: run parallel
 		delays := make([]int, len(frames))
-		for _, frame := range frames {
+		for i, frame := range frames {
 			img := frame.Image
-			delays = append(delays, frame.CsDelay)
-			palleted := &image.Paletted{
-				Pix:     img.Pix,
-				Stride:  img.Stride,
-				Rect:    img.Rect,
-				Palette: q.Quantize(p, img),
-			}
+
+			delays[i] = frame.CsDelay
+
+			emptyPalette := make([]color.Color, 0, 256)
+			pal := quantizer.Quantize(emptyPalette, img)
+
+			palleted := image.NewPaletted(img.Rect, pal)
+			draw.Src.Draw(palleted, img.Bounds(), img, image.Point{})
+
+			println("processed image", i, "delay=", frame.CsDelay)
+			onProcess()
 			gifImage = append(gifImage, palleted)
 		}
 
@@ -146,18 +118,124 @@ func SaveGif(filename string, frames []GifFrame) Task[carrot.Void] {
 		if err != nil {
 			task.Error = err
 		} else {
-
+			println("writing gif to file", filename)
 			task.Error = gif.EncodeAll(file, g)
+			file.Close()
 		}
 
 	}()
 	return task
 }
 
-func (capturer *GifCapturer) coroutine(in *carrot.Invoker) {
+func (capturer *GifCapturer) coroutine(ctrl *carrot.Control) {
 	awaitEnter := func() {
-		in.UntilFunc(func() bool { return ebiten.IsKeyPressed(ebiten.KeyEnter) })
+		ctrl.Yield()
+		ctrl.YieldUntil(func() bool {
+			return inpututil.IsKeyJustPressed(ebiten.KeyEnter)
+		})
 	}
+
+START:
+	// inactive
+	println("* inactive")
+	capturer.game.borderLight = ColorTeal
+	capturer.game.borderDark = ColorTealDark
+	capturer.running.Store(false)
+	capturer.draw = capturer.drawInactive
+	awaitEnter()
+
+	// active
+	println("* start recording")
+	var frames []GifFrame
+	{
+		capturer.numImages = 0
+		capturer.numProcessed = 0
+		capturer.game.borderLight = ColorRed
+		capturer.game.borderDark = ColorRedDark
+		capturer.game.borderOnly = true
+		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeDisabled)
+		ebiten.SetWindowDecorated(false)
+		capturer.draw = capturer.drawActive
+		capturer.running.Store(true)
+
+		fps := capturer.game.settings.FPS
+		frameDuration := (1 / float64(fps)) * 1000 * 1000
+
+		screenshotCo := ctrl.StartAsync(func(ctrl *carrot.Control) {
+			lastShot := time.Now()
+			for {
+				bounds := GetWindowBounds()
+
+				img, err := screenshot.CaptureRect(bounds)
+				if err != nil {
+					capturer.Error = err
+					return
+				}
+
+				delay := int(time.Since(lastShot).Milliseconds() / 10)
+				if len(frames) == 0 {
+					delay = 0
+				}
+
+				capturer.numImages++
+				frames = append(frames, GifFrame{
+					Image:   img,
+					CsDelay: delay,
+				})
+				lastShot = time.Now()
+
+				println("screenshot taken")
+
+				ctrl.Sleep(time.Duration(frameDuration) * time.Microsecond)
+			}
+		})
+
+		awaitEnter()
+		screenshotCo.Cancel()
+		ctrl.YieldUntil(screenshotCo.IsDone)
+
+		if capturer.Error != nil {
+			goto ERROR
+		}
+	}
+
+	// saving
+	println("* saving")
+	{
+		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
+		capturer.game.borderOnly = false
+		capturer.draw = capturer.drawSaving
+		capturer.saveFilename = capturer.game.getNextOutFilename()
+		saveTask := SaveGif(capturer.saveFilename, frames, func() { capturer.numProcessed++ })
+		ctrl.YieldUntil(saveTask.IsDone)
+		if saveTask.Error != nil {
+			capturer.Error = saveTask.Error
+			goto ERROR
+		}
+
+		now := time.Now()
+		for {
+			ctrl.Yield()
+			if time.Since(now).Seconds() > 2 && saveTask.IsDone() {
+				break
+			}
+		}
+	}
+
+	// saved
+	println("* saved")
+	{
+		capturer.draw = capturer.drawSaved
+		now := time.Now()
+		for {
+			if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || time.Since(now).Seconds() > 2 {
+				break
+			}
+			ctrl.Yield()
+		}
+	}
+
+	goto START
 
 ERROR:
 	println(capturer.Error)
@@ -165,269 +243,78 @@ ERROR:
 	awaitEnter()
 	capturer.Error = nil
 
-START:
-
-	// inactive
-	capturer.draw = capturer.drawInactive
-	awaitEnter()
-
-	// active
-
-	bounds := GetWindowBounds()
-	var frames []GifFrame
-	screenshotCo := carrot.Start(func(in *carrot.Invoker) {
-		var task Task[GifFrame]
-		task.Finish()
-		for {
-			in.UntilFunc(task.IsDone)
-			if task.Error != nil {
-				capturer.Error = task.Error
-				return
-			}
-
-			delay := task.Result.CsDelay
-			if len(frames) == 0 {
-				delay = 0
-			}
-			frames = append(frames, GifFrame{
-				Image:   task.Result.Image,
-				CsDelay: delay,
-			})
-
-			task = StartScreenshot(bounds)
-
-			frameDuration := (1 / float64(capturer.fps)) * 1000 * 1000
-			in.Sleep(time.Duration(frameDuration) * time.Microsecond)
-		}
-	})
-
-	awaitEnter()
-	screenshotCo.Cancel()
-	in.UntilFunc(screenshotCo.IsDone)
-	if capturer.Error != nil {
-		goto ERROR
-	}
-
-	// saving
-	capturer.draw = capturer.drawSaving
-	filename := capturer.game.settings.OutputFilename
-	saveTask := SaveGif(filename, frames)
-	in.UntilFunc(saveTask.IsDone)
-
-	// saved
-	capturer.draw = capturer.drawSaved
-
-	now := time.Now()
-	for {
-		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || time.Since(now).Seconds() > 5 {
-			break
-		}
-	}
-
 	goto START
 
 }
 
-/*
-func (capturer *GifCapturer) screenshot() {
-	if len(capturer.images) == 0 {
-		capturer.lastShot = time.Now()
-	}
-
-	img, err := screenshot.CaptureRect(capturer.rect)
-	duration := time.Since(capturer.lastShot)
-
-	if err != nil {
-		if capturer.Error == nil {
-			capturer.Error = err
-		} else {
-			millis := int(duration.Abs().Milliseconds())
-			capturer.images = append(capturer.images, img)
-			capturer.delays = append(capturer.delays, millis/10)
-		}
-	}
+func (capturer *GifCapturer) IsRunning() bool {
+	return capturer.running.Load()
 }
-*/
-
-/*
-func (capturer *GifCapturer) Screenshot() {
-	if capturer.state.Load() != GifCapturerStateRunning {
-		return
-	}
-	capturer.queue <- GifCapturerActionScreenshot
-}
-
-func (capturer *GifCapturer) Dispose(filename string) {
-	if capturer.state.Load() == GifCapturerStateDisposed {
-		return
-	}
-	capturer.state.Store(GifCapturerStateDisposed)
-	capturer.halt <- struct{}{}
-	capturer.images = nil
-	capturer.delays = nil
-}
-*/
-
-/*
-func (capturer *GifCapturer) save() {
-	images := capturer.images
-	delays := capturer.delays
-
-	capturer.images = nil
-	capturer.delays = nil
-
-	p := make([]color.Color, 0, 256)
-	gifImage := []*image.Paletted{}
-	q := quantize.MedianCutQuantizer{}
-	for _, img := range images {
-		palleted := &image.Paletted{
-			Pix:     img.Pix,
-			Stride:  img.Stride,
-			Rect:    img.Rect,
-			Palette: q.Quantize(p, img),
-		}
-		gifImage = append(gifImage, palleted)
-	}
-
-	g := &gif.GIF{
-		Image: gifImage,
-		Delay: delays,
-	}
-	file, err := os.OpenFile(capturer.filename, os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		capturer.Error = err
-	} else {
-		capturer.Error = gif.EncodeAll(file, g)
-	}
-
-}
-func (capturer *GifCapturer) Save(filename string) {
-	if !capturer.state.CompareAndSwap(GifCapturerStateRunning, GifCapturerStateSaving) {
-		return
-	}
-
-	capturer.filename = filename
-	capturer.queue <- GifCapturerActionSave
-}
-*/
-
-/*
-
-// Using coroutine definitely is more clean,
-// and the functions are reusable and modular.
-// No need to worry about channel deadlocks too.
-func coroutine(in) {
-	awaitEnter := func() {
-		in.UntilFunc(ebiten.IsKeyPressed)
-	}
-
-inactive:
-	capturer.draw = capturer.drawInactive
-	awaitEnter()
-
-
-active:
-	var images []*image.RGBA
-	var delays []int = {}int{}
-	screenshotCo := in.Start(func(in) {
-		task = ...
-		for {
-
-			if task != nil {
-				in.UntilFunc(task.IsDone)
-				delay := task.CsecDuration
-				if len(images) == 0{
-					delay = 0
-				}
-				delays = append(delays, task.CsecDuration)
-				images = append(images, task.Image)
-			}
-
-			task = screenshot()
-
-			frameDuration := (1 / float64(capturer.fps))
-			in.Sleep(frameDuration)
-		}
-	})
-
-	awaitEnter()
-	screenshotCo.Cancel()
-	in.UntilFunc(screenshotCo.IsDone)
-
-saving:
-	capturer.draw = capturer.drawSaving
-	saveTask = SaveGif(images, delays)
-	in.UntilFunc(saveTask.IsDone)
-
-saved:
-	capturer.draw = capturer.drawDone
-
-	now := time.Now()
-	for capturer.IsSaving() {
-		if input.IsKeyJustPressed(Enter) || time.Since(now).Seconds() > 5 {
-			break
-		}
-	}
-
-	goto start:
-
-disposed:
-}
-
-func (capturer *GifCapturer) updateSaving() {
-	if capturer.fps < 60 {
-		frameDuration := (1 / float64(capturer.fps)) * 1000 * 1000
-		if time.Since(capturer.lastUpdate).Microseconds() < int64(frameDuration) {
-			return
-		}
-	}
-
-	capturer.lastUpdate = time.Now()
-	capturer.Screenshot()
-}
-
-*/
 
 func (capturer *GifCapturer) Update() {
-	/*
-		switch capturer.state.Load() {
-		case GifCapturerStateStopped:
-			capturer.updateStopped()
-		case GifCapturerStateRunning:
-			capturer.updateRunning()
-		case GifCapturerStateSaving:
-			capturer.updateSaving()
+	capturer.script.Update()
+
+	if !capturer.IsRunning() {
+		s := &capturer.game.settings
+		fps := s.FPS
+		if inpututil.IsKeyJustPressed(ebiten.KeyMinus) && fps > 1 {
+			fps--
+		} else if inpututil.IsKeyJustPressed(ebiten.KeyEqual) && fps < 30 {
+			fps++
 		}
-	*/
+		if s.FPS != fps {
+			s.FPS = fps
+			capturer.game.scheduleSaveSettings()
+		}
+	}
 }
 
 func (capturer *GifCapturer) drawInactive(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorTeal
-	capturer.scrp.Println("Status: Ready")
+	capturer.scrp.Println("Ready")
 	scrp.Color = ColorWhite
 	capturer.scrp.Println("Press [enter] to start")
+
+	scrp.Font = capturer.game.smallFont
+	scrp.Println("\n\n")
+	scrp.Printf("%v FPS [-][+]", capturer.game.settings.FPS)
+	scrp.Font = capturer.game.tinyFont
+
+	scrp.Println("\n\n")
+	scrp.Font = capturer.game.smallFont
+	scrp.Println("Resize and position\nthis window to the area ")
+	scrp.Println("where you want to capture.")
 }
+
 func (capturer *GifCapturer) drawActive(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorGreen
-	capturer.scrp.Println("Status: Recording")
+	capturer.scrp.Println("Recording")
 	scrp.Color = ColorWhite
 	capturer.scrp.Println("Press [enter] to stop")
+	scrp.Font = capturer.game.smallFont
+	capturer.scrp.Printf("number of images: %v", capturer.numImages)
+
+	scrp.Println("\n\n")
+	scrp.Font = capturer.game.smallFont
+	scrp.Println("You can now hide or minimize this window, or press F10 to show border only")
+	scrp.Println("When you are done, return to this window.")
 }
 
 func (capturer *GifCapturer) drawSaving(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorWhite
-	capturer.scrp.Println("Status: Saving")
+	capturer.scrp.Printf("Saving to %v\n", capturer.saveFilename)
 	scrp.Color = ColorWhite
-	capturer.scrp.Println("Press wait...")
+	scrp.Font = capturer.game.smallFont
+	capturer.scrp.Printf("Please wait: %v / %v", capturer.numProcessed, capturer.numImages)
 }
 
 func (capturer *GifCapturer) drawSaved(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorWhite
-	capturer.scrp.Println("Status: done")
+	capturer.scrp.Println("Done!")
 	scrp.Color = ColorWhite
 	capturer.scrp.Println("Press [enter] to continue")
 }
@@ -435,33 +322,47 @@ func (capturer *GifCapturer) drawSaved(screen *ebiten.Image) {
 func (capturer *GifCapturer) drawError(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorWhite
-	capturer.scrp.Println("Status: something broke")
+	capturer.scrp.Println("Ruh-oh, Something broke")
 	scrp.Color = ColorWhite
 	capturer.scrp.Printf("%v", capturer.Error)
 }
 
 func (capturer *GifCapturer) Draw(screen *ebiten.Image) {
 	scrp := capturer.scrp
-	scrp.AlignX = 0b10
-	if capturer.draw != nil {
+
+	scrp.AlignX = 0b11
+
+	scrp.Font = capturer.game.regularFont
+	if capturer.draw != nil && !capturer.game.borderOnly {
 		capturer.draw(screen)
 	}
-	/*
-		g.scrp.Font = g.smallFont
 
-		g.scrp.Color = ColorTeal
-		g.scrp.Font = g.regularFont
-		g.scrp.AlignX = 0b11
-		g.scrp.Printf("\n\n\nStatus: %v\n", "ready")
+	if capturer.game.borderOnly && capturer.running.Load() {
+		scrp.Font = capturer.game.tinyFont
+		_, h := ebiten.WindowSize()
 
-		g.scrp.AlignX = 0b11
-		g.scrp.Color = color.White
-		g.scrp.Font = g.regularFont
-		g.scrp.Printf("Press [enter] to start")
+		s := fmt.Sprintf("%v", capturer.numImages)
+		b := text.BoundString(scrp.Font, "9")
+		w := b.Dx() * len(s)
 
-		g.scrp.Println("\n\n\n\n\n")
-		g.scrp.Font = g.smallFont
-		g.scrp.Println("Resize and position\nthis window to the area ")
-		g.scrp.Println("where you want to capture.")
-	*/
+		ebitenutil.DrawRect(
+			screen,
+			float64(0),
+			float64(h-b.Dy()-scrp.Border),
+			float64(w+scrp.Border),
+			float64(b.Dy()+scrp.Border),
+			ColorBlackTransparent,
+		)
+		scrp.PrintAt(0b0001, s)
+	}
+
 }
+
+// TODO: it runs out of memory when I leave it recording for too long
+// So the problem is that the builtin gif package doesn't allow
+// streaming to a file, so I just accumulate an increasing array
+// of images. I could either fork gif to allow streaming,
+// or find another library that does this.
+// Forking or changing it myself seems like a better option
+// since it's just a small change.
+// Well, I can't just fork it since it part of the stlib.
