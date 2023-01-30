@@ -6,11 +6,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
 	"github.com/hajimehoshi/ebiten/v2"
 )
+
+type Void struct{}
 
 func TrimExt(filename string) (baseFilename, ext string) {
 	ext = filepath.Ext(filename)
@@ -95,3 +99,62 @@ func TimeRun(label string, fn func()) {
 	elapsed := int(time.Since(now).Milliseconds())
 	println(label, elapsed)
 }
+
+type Queue[T any] struct {
+	data  []T
+	index int
+	mu    sync.Mutex
+}
+
+func CreateQueue[T any](initSize int) Queue[T] {
+	return Queue[T]{
+		data:  make([]T, initSize),
+		index: 0,
+	}
+}
+
+func (q *Queue[T]) Push(item T) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.index >= len(q.data) {
+		q.data = growSlice(q.data)
+		if q.index >= len(q.data) {
+			panic("failed to sufficiently grow slice")
+		}
+	}
+
+	q.data[q.index] = item
+	q.index++
+}
+
+func (q *Queue[T]) Pop() (T, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.index == 0 {
+		var none T
+		return none, false
+	}
+	q.index--
+	return q.data[q.index], true
+}
+
+func (q *Queue[T]) IsEmpty() bool {
+	return q.index == 0 || len(q.data) == 0
+}
+
+func growSlice[T any](slice []T) []T {
+	newSize := cap(slice) * 2
+	resized := make([]T, newSize)
+	copy(resized, slice)
+	return resized
+}
+
+type Task[T any] struct {
+	Result T
+	Error  error
+	done   atomic.Bool
+}
+
+func (task *Task[T]) Finish()      { task.done.Store(true) }
+func (task *Task[T]) IsDone() bool { return task.done.Load() }

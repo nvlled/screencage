@@ -180,7 +180,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			fmt.Sprintf("Output method [F12]: %v", g.settings.OutputMethod),
 			"Hide [F10]",
 		)
-		g.scrp.Printf("Output file [F5]: %v", g.outputFilename)
+		g.scrp.Printf("Output type [F8]: %v", g.settings.OutputType)
 		g.scrp.Println("\n\n\n")
 	}
 

@@ -22,6 +22,7 @@ require (
 	github.com/jezek/xgb v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e // indirect
+	github.com/nvlled/gogif v0.0.0-20230130043423-5a1e0be569fe // indirect
 	github.com/nvlled/mud v0.2.0 // indirect
 	golang.org/x/exp v0.0.0-20221217163422-3c43f8badb15 // indirect
 	golang.org/x/exp/shiny v0.0.0-20230118134722-a68e582fa157 // indirect

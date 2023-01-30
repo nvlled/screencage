@@ -5,10 +5,11 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"image/gif"
 	"os"
 	"sync/atomic"
 	"time"
+
+	gif "github.com/nvlled/gogif"
 
 	"github.com/ericpauley/go-quantize/quantize"
 	"github.com/hajimehoshi/ebiten/v2"
@@ -17,7 +18,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
-	"github.com/xyproto/palgen"
 )
 
 const (
@@ -64,66 +64,21 @@ type GifFrame struct {
 	CsDelay int
 }
 
-type Task[T any] struct {
-	Result T
-	Error  error
-	done   atomic.Bool
-}
-
-func (task *Task[T]) Finish()      { task.done.Store(true) }
-func (task *Task[T]) IsDone() bool { return task.done.Load() }
-
-type Void struct{}
-
-func SaveGif(filename string, frames []GifFrame, onProcessOpt ...func()) *Task[Void] {
+func SaveOneGif(encoder *gif.StreamEncoder, img *image.RGBA, delay int) *Task[Void] {
 	task := &Task[Void]{}
 	go func() {
 		defer task.Finish()
 
-		gifImage := []*image.Paletted{}
 		quantizer := quantize.MedianCutQuantizer{}
+		emptyPalette := make([]color.Color, 0, 256)
+		pal := quantizer.Quantize(emptyPalette, img)
 
-		_ = quantizer
-		_ = palgen.Generate
+		palleted := image.NewPaletted(img.Rect, pal)
+		draw.Src.Draw(palleted, img.Bounds(), img, image.Point{})
 
-		onProcess := func() {}
-		if len(onProcessOpt) > 0 {
-			onProcess = onProcessOpt[0]
-		}
-
-		// TODO: run parallel
-		delays := make([]int, len(frames))
-		for i, frame := range frames {
-			img := frame.Image
-
-			delays[i] = frame.CsDelay
-
-			emptyPalette := make([]color.Color, 0, 256)
-			pal := quantizer.Quantize(emptyPalette, img)
-
-			palleted := image.NewPaletted(img.Rect, pal)
-			draw.Src.Draw(palleted, img.Bounds(), img, image.Point{})
-
-			println("processed image", i, "delay=", frame.CsDelay)
-			onProcess()
-			gifImage = append(gifImage, palleted)
-		}
-
-		g := &gif.GIF{
-			Image: gifImage,
-			Delay: delays,
-		}
-
-		file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			task.Error = err
-		} else {
-			println("writing gif to file", filename)
-			task.Error = gif.EncodeAll(file, g)
-			file.Close()
-		}
-
+		encoder.Encode(palleted, delay, gif.DisposalNone)
 	}()
+
 	return task
 }
 
@@ -135,6 +90,16 @@ func (capturer *GifCapturer) coroutine(ctrl *carrot.Control) {
 		})
 	}
 
+	goto START
+
+ERROR:
+	println("error", capturer.Error.Error())
+	capturer.draw = capturer.drawError
+	awaitEnter()
+	capturer.Error = nil
+
+	goto START
+
 START:
 	// inactive
 	println("* inactive")
@@ -142,11 +107,21 @@ START:
 	capturer.game.borderDark = ColorTealDark
 	capturer.running.Store(false)
 	capturer.draw = capturer.drawInactive
+	capturer.numImages = 0
+	capturer.numProcessed = 0
 	awaitEnter()
 
+	capturer.saveFilename = capturer.game.getNextOutFilename()
+	file, err := os.OpenFile(capturer.saveFilename, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		capturer.Error = err
+		goto ERROR
+	}
+	encoder := gif.NewStreamEncoder(file, &gif.StreamEncoderOptions{})
+
 	// active
+	var encodingCtrl carrot.SubControl
 	println("* start recording")
-	var frames []GifFrame
 	{
 		capturer.numImages = 0
 		capturer.numProcessed = 0
@@ -158,10 +133,14 @@ START:
 		capturer.draw = capturer.drawActive
 		capturer.running.Store(true)
 
+		ctrl.Yield()
+
 		fps := capturer.game.settings.FPS
 		frameDuration := (1 / float64(fps)) * 1000 * 1000
 
-		screenshotCo := ctrl.StartAsync(func(ctrl *carrot.Control) {
+		queue := CreateQueue[GifFrame](128)
+
+		screenShotCtrl := ctrl.StartAsync(func(ctrl *carrot.Control) {
 			lastShot := time.Now()
 			for {
 				bounds := GetWindowBounds()
@@ -173,26 +152,32 @@ START:
 				}
 
 				delay := int(time.Since(lastShot).Milliseconds() / 10)
-				if len(frames) == 0 {
-					delay = 0
-				}
-
 				capturer.numImages++
-				frames = append(frames, GifFrame{
-					Image:   img,
-					CsDelay: delay,
-				})
+				println("* screenshot", capturer.numImages)
+
+				queue.Push(GifFrame{Image: img, CsDelay: delay})
 				lastShot = time.Now()
-
-				println("screenshot taken")
-
 				ctrl.Sleep(time.Duration(frameDuration) * time.Microsecond)
+			}
+		})
+		encodingCtrl = ctrl.StartAsync(func(ctrl *carrot.Control) {
+			for !queue.IsEmpty() || !screenShotCtrl.IsDone() {
+				frame, ok := queue.Pop()
+				if !ok {
+					ctrl.Yield()
+					continue
+				}
+				task := SaveOneGif(encoder, frame.Image, frame.CsDelay)
+				ctrl.YieldUntil(task.IsDone)
+				capturer.numProcessed++
+				println("* saved", capturer.numProcessed)
 			}
 		})
 
 		awaitEnter()
-		screenshotCo.Cancel()
-		ctrl.YieldUntil(screenshotCo.IsDone)
+		screenShotCtrl.Cancel()
+
+		ctrl.YieldUntil(screenShotCtrl.IsDone)
 
 		if capturer.Error != nil {
 			goto ERROR
@@ -205,18 +190,11 @@ START:
 		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 		capturer.game.borderOnly = false
 		capturer.draw = capturer.drawSaving
-		capturer.saveFilename = capturer.game.getNextOutFilename()
-		saveTask := SaveGif(capturer.saveFilename, frames, func() { capturer.numProcessed++ })
-		ctrl.YieldUntil(saveTask.IsDone)
-		if saveTask.Error != nil {
-			capturer.Error = saveTask.Error
-			goto ERROR
-		}
 
 		now := time.Now()
 		for {
 			ctrl.Yield()
-			if time.Since(now).Seconds() > 2 && saveTask.IsDone() {
+			if time.Since(now).Seconds() > 2 && encodingCtrl.IsDone() {
 				break
 			}
 		}
@@ -234,14 +212,6 @@ START:
 			ctrl.Yield()
 		}
 	}
-
-	goto START
-
-ERROR:
-	println(capturer.Error)
-	capturer.draw = capturer.drawError
-	awaitEnter()
-	capturer.Error = nil
 
 	goto START
 
@@ -358,11 +328,5 @@ func (capturer *GifCapturer) Draw(screen *ebiten.Image) {
 
 }
 
-// TODO: it runs out of memory when I leave it recording for too long
-// So the problem is that the builtin gif package doesn't allow
-// streaming to a file, so I just accumulate an increasing array
-// of images. I could either fork gif to allow streaming,
-// or find another library that does this.
-// Forking or changing it myself seems like a better option
-// since it's just a small change.
-// Well, I can't just fork it since it part of the stlib.
+// TODO: use robogo to follow mouse
+// TODO: try recording for an hour

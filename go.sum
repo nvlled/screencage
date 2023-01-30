@@ -49,6 +49,8 @@ github.com/lxn/win v0.0.0-20210218163916-a377121e959e/go.mod h1:KxxjdtRkfNoYDCUP
 github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e/go.mod h1:zD1mROLANZcx1PVRCS0qkT7pwLkGfwJo4zjcN/Tysno=
 github.com/nvlled/carrot v0.6.0 h1:aDQAOntu7AbRtH4QSjfypw8hE+DTbV1SR1HRwNYgVfA=
 github.com/nvlled/carrot v0.6.0/go.mod h1:hVoIjclTBYLGHw8nv6BUjp7bsxN2pd4zKv7/XPxDkEs=
+github.com/nvlled/gogif v0.0.0-20230130043423-5a1e0be569fe h1:2KoDgQloRxuCRqbRd0yrf2Scxv8xaQ8R+A6z1FPtKi0=
+github.com/nvlled/gogif v0.0.0-20230130043423-5a1e0be569fe/go.mod h1:W17G/F8q7Ye8J6+86G1TfisSEh+cc8Mfwd4twsD9Y7Y=
 github.com/nvlled/mud v0.2.0 h1:7PBnh9QuRbhS1bkFvH0CASVl0pcbHwNeJGGSWjC13OI=
 github.com/nvlled/mud v0.2.0/go.mod h1:ZhF6wEnilrnb4bDpNGxbjWrbSwpMIkxMNdD2pf/3hYA=
 github.com/peterhellberg/gfx v0.0.0-20191011152831-b91a0de61948/go.mod h1:itlt/V2ABb7sDu42VXQHXmQ4KOdrEbFZDVIaHsRcwak=

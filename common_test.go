@@ -27,3 +27,27 @@ func TestLatestIncrementedFile(t *testing.T) {
 	result := NextLatestIncrementedFilename("/home/nvlled/screen-1.gif")
 	println(result)
 }
+
+func TestQueue(t *testing.T) {
+	q := CreateQueue[int](10)
+
+	_, ok := q.Pop()
+	if ok {
+		t.Error("cannot pop from empty queue")
+	}
+	q.Push(123)
+	if val, ok := q.Pop(); !ok || val != 123 {
+		t.Errorf("failed to retrieved pushed value: %v", val)
+	}
+
+	for i := 0; i < 15; i++ {
+		q.Push(i)
+	}
+
+	for i := 14; i >= 0; i-- {
+		if val, ok := q.Pop(); !ok || i != val {
+			t.Errorf("failed to retrieved pushed value: %v", val)
+		}
+	}
+
+}
