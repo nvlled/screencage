@@ -1,29 +1,29 @@
 package main
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
+	"image/png"
 	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/ericpauley/go-quantize/quantize"
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
-	gif "github.com/nvlled/gogif"
+	"github.com/nvlled/screen-ebi/framerate"
 )
 
-type GifCapturer struct {
+type PngCapturer struct {
 	saveFilename string
 
 	numImages    int
 	numProcessed int
+
+	imageCounter int
 
 	running atomic.Bool
 
@@ -39,8 +39,8 @@ type GifCapturer struct {
 	Err error
 }
 
-func NewGifCapturer(game *Game) *GifCapturer {
-	capturer := &GifCapturer{
+func NewPngCapturer(game *Game) *PngCapturer {
+	capturer := &PngCapturer{
 		game: game,
 		scrp: game.scrp,
 	}
@@ -48,24 +48,74 @@ func NewGifCapturer(game *Game) *GifCapturer {
 	return capturer
 }
 
-type GifFrame struct {
+type PngFrame struct {
 	Image   *image.RGBA
 	CsDelay int
 }
 
-func (capturer *GifCapturer) coroutine(ctrl *carrot.Control) {
-START:
-	for {
-		println("* inactive")
-		capturer.game.borderLight = ColorTeal
-		capturer.game.borderDark = ColorTealDark
-		capturer.running.Store(false)
-		capturer.draw = capturer.drawInactive
-		capturer.numImages = 0
-		capturer.numProcessed = 0
+func ScreenshotAndSave(filename string) *Task[Void] {
+	task := &Task[Void]{}
+	go func() {
+		defer task.Finish()
+		bounds := GetWindowBounds()
+		image, err := screenshot.CaptureRect(bounds)
+		if err != nil {
+			task.Err = err
+			return
+		}
+		file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			task.Err = err
+			return
+		}
 
-		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-			capturer.Err = capturer.startRecording(ctrl)
+		defer file.Close()
+		task.Err = png.Encode(file, image)
+	}()
+
+	return task
+}
+
+func SaveOnePng(filename string, img *image.RGBA) *Task[Void] {
+	task := &Task[Void]{}
+	go func() {
+		defer task.Finish()
+
+		quantizer := quantize.MedianCutQuantizer{}
+		emptyPalette := make([]color.Color, 0, 256)
+		pal := quantizer.Quantize(emptyPalette, img)
+
+		palleted := image.NewPaletted(img.Rect, pal)
+		draw.Src.Draw(palleted, img.Bounds(), img, image.Point{})
+
+		file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			task.Err = err
+		} else {
+			task.Err = png.Encode(file, img)
+		}
+	}()
+
+	return task
+}
+
+func (capturer *PngCapturer) coroutine(ctrl *carrot.Control) {
+START:
+	println("* inactive")
+	capturer.game.borderLight = ColorTeal
+	capturer.game.borderDark = ColorTealDark
+	capturer.running.Store(false)
+	capturer.draw = capturer.drawInactive
+	capturer.numImages = 0
+	capturer.numProcessed = 0
+
+	for {
+		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+			capturer.Err = capturer.startSingleScreenShot(ctrl)
+			break
+		} else if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			capturer.Err = capturer.startMultiScreenShot(ctrl)
+			break
 		}
 		if capturer.Err != nil {
 			goto ERROR
@@ -73,6 +123,7 @@ START:
 
 		ctrl.Yield()
 	}
+	goto START
 
 ERROR:
 	println("error", capturer.Err.Error())
@@ -84,8 +135,25 @@ ERROR:
 
 }
 
-func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
-	capturer.saveFilename, _ =
+func (capturer *PngCapturer) startSingleScreenShot(ctrl *carrot.Control) error {
+	println("starting screenshot")
+	capturer.game.borderOnly = true
+	awaitNextDraw(ctrl, &capturer.lastDraw)
+
+	filename, _ := capturer.game.getNextOutFilename()
+	task := ScreenshotAndSave(filename)
+	println("screenshot done")
+	ctrl.YieldUntil(task.IsDone)
+	capturer.game.borderOnly = false
+	if task.Err != nil {
+		return task.Err
+	}
+
+	return nil
+}
+
+func (capturer *PngCapturer) startMultiScreenShot(ctrl *carrot.Control) error {
+	capturer.saveFilename, capturer.imageCounter =
 		capturer.game.getNextOutFilename()
 
 	file, err := os.OpenFile(capturer.saveFilename, os.O_CREATE|os.O_WRONLY, 0644)
@@ -93,10 +161,9 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 		return err
 	}
 	defer file.Close()
-	encoder := gif.NewStreamEncoder(file, &gif.StreamEncoderOptions{})
 
-	// recording
-	var encodingCtrl carrot.SubControl
+	var savingCtrl carrot.SubControl
+
 	println("* start recording")
 	{
 		capturer.numImages = 0
@@ -111,22 +178,26 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 
 		awaitNextDraw(ctrl, &capturer.lastDraw)
 
-		queue := CreateQueue[GifFrame](128)
+		queue := CreateQueue[*image.RGBA](128)
 
 		var err error
 
 		screenShotCtrl := ctrl.StartAsync(func(ctrl *carrot.Control) {
-			err = capturer.startScreenShotLoop(&queue, ctrl)
+			err = capturer.startCaptureLoop(&queue, ctrl)
 		})
 
-		encodingCtrl = ctrl.StartAsync(func(ctrl *carrot.Control) {
+		savingCtrl = ctrl.StartAsync(func(ctrl *carrot.Control) {
 			for !queue.IsEmpty() || !screenShotCtrl.IsDone() {
-				frame, ok := queue.Pop()
+				img, ok := queue.Pop()
 				if !ok {
 					ctrl.Yield()
 					continue
 				}
-				task := SaveOneGif(encoder, frame.Image, frame.CsDelay)
+
+				filename := ReplaceIncrementedFilename(capturer.saveFilename, capturer.imageCounter)
+				capturer.imageCounter++
+
+				task := SaveOnePng(filename, img)
 				ctrl.YieldUntil(task.IsDone)
 
 				if task.Err != nil {
@@ -155,10 +226,8 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 			}
 			ctrl.Yield()
 		}
-		//ctrl.YieldUntil(screenShotCtrl.IsDone)
 	}
 
-	// saving
 	println("* saving")
 	{
 		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
@@ -168,16 +237,12 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 		now := time.Now()
 		for {
 			ctrl.Yield()
-			if time.Since(now).Seconds() > 2 && encodingCtrl.IsDone() {
+			if time.Since(now).Seconds() > 2 && savingCtrl.IsDone() {
 				break
 			}
 		}
-		if err := encoder.Close(); err != nil {
-			return err
-		}
 	}
 
-	// saved
 	println("* saved")
 	{
 		capturer.draw = capturer.drawSaved
@@ -193,8 +258,7 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 	return nil
 }
 
-func (capturer *GifCapturer) startScreenShotLoop(queue *Queue[GifFrame], ctrl *carrot.Control) error {
-	lastShot := time.Now()
+func (capturer *PngCapturer) startCaptureLoop(queue *Queue[*image.RGBA], ctrl *carrot.Control) error {
 	rate := capturer.game.settings.FrameRate
 	frameDuration := rate.Duration()
 	for {
@@ -205,21 +269,19 @@ func (capturer *GifCapturer) startScreenShotLoop(queue *Queue[GifFrame], ctrl *c
 			return err
 		}
 
-		delay := int(time.Since(lastShot).Milliseconds() / 10)
 		capturer.numImages++
 		println("* screenshot", capturer.numImages)
 
-		queue.Push(GifFrame{Image: img, CsDelay: delay})
-		lastShot = time.Now()
+		queue.Push(img)
 		ctrl.Sleep(frameDuration)
 	}
 }
 
-func (capturer *GifCapturer) IsRunning() bool {
+func (capturer *PngCapturer) IsRunning() bool {
 	return capturer.running.Load()
 }
 
-func (capturer *GifCapturer) Update() {
+func (capturer *PngCapturer) Update() {
 	capturer.script.Update()
 
 	if !capturer.IsRunning() {
@@ -237,21 +299,27 @@ func (capturer *GifCapturer) Update() {
 			capturer.game.scheduleSaveSettings()
 		}
 		s.FrameRate.Clamp(1, 30)
+
+		if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
+			println("x")
+			s.FrameRate.Unit = (s.FrameRate.Unit + 1) % framerate.Unit_End
+		}
 	}
 }
 
-func (capturer *GifCapturer) drawInactive(screen *ebiten.Image) {
+func (capturer *PngCapturer) drawInactive(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	s := capturer.game.settings
 	scrp.Color = ColorTeal
 	capturer.scrp.Println("Ready")
 	scrp.Color = ColorWhite
+	capturer.scrp.Println("Press [space] to take one screenshot")
 	capturer.scrp.Println("Press [enter] to start recording")
 
 	scrp.Font = capturer.game.smallFont
 	scrp.Println("\n\n")
 	scrp.Printf("rate: %v", s.FrameRate.String())
-	scrp.Printf("controls: optional [shift] with [-][+]")
+	scrp.Printf("controls: optional [shift] with [-][+] | [backspace]")
 	scrp.Font = capturer.game.tinyFont
 
 	scrp.Println("\n\n")
@@ -260,7 +328,7 @@ func (capturer *GifCapturer) drawInactive(screen *ebiten.Image) {
 	scrp.Println("where you want to capture.")
 }
 
-func (capturer *GifCapturer) drawActive(screen *ebiten.Image) {
+func (capturer *PngCapturer) drawActive(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorGreen
 	capturer.scrp.Println("Recording")
@@ -275,7 +343,7 @@ func (capturer *GifCapturer) drawActive(screen *ebiten.Image) {
 	scrp.Println("When you are done, return to this window.")
 }
 
-func (capturer *GifCapturer) drawSaving(screen *ebiten.Image) {
+func (capturer *PngCapturer) drawSaving(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorWhite
 	capturer.scrp.Printf("Saving to %v\n", capturer.saveFilename)
@@ -284,7 +352,7 @@ func (capturer *GifCapturer) drawSaving(screen *ebiten.Image) {
 	capturer.scrp.Printf("Please wait: %v / %v", capturer.numProcessed, capturer.numImages)
 }
 
-func (capturer *GifCapturer) drawSaved(screen *ebiten.Image) {
+func (capturer *PngCapturer) drawSaved(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorWhite
 	capturer.scrp.Println("Done!")
@@ -292,7 +360,7 @@ func (capturer *GifCapturer) drawSaved(screen *ebiten.Image) {
 	capturer.scrp.Println("Press [enter] to continue")
 }
 
-func (capturer *GifCapturer) drawError(screen *ebiten.Image) {
+func (capturer *PngCapturer) drawError(screen *ebiten.Image) {
 	scrp := capturer.scrp
 	scrp.Color = ColorWhite
 	capturer.scrp.Println("Ruh-oh, Something broke")
@@ -300,7 +368,7 @@ func (capturer *GifCapturer) drawError(screen *ebiten.Image) {
 	capturer.scrp.Printf("%v", capturer.Err)
 }
 
-func (capturer *GifCapturer) Draw(screen *ebiten.Image) {
+func (capturer *PngCapturer) Draw(screen *ebiten.Image) {
 	capturer.lastDraw = time.Now().UnixMilli()
 	scrp := capturer.scrp
 
@@ -310,41 +378,4 @@ func (capturer *GifCapturer) Draw(screen *ebiten.Image) {
 	if capturer.draw != nil && !capturer.game.borderOnly {
 		capturer.draw(screen)
 	}
-
-	if capturer.game.borderOnly && capturer.running.Load() {
-		scrp.Font = capturer.game.tinyFont
-		_, h := ebiten.WindowSize()
-
-		s := fmt.Sprintf("%v", capturer.numImages)
-		b := text.BoundString(scrp.Font, "9")
-		w := b.Dx() * len(s)
-
-		ebitenutil.DrawRect(
-			screen,
-			float64(0),
-			float64(h-b.Dy()-scrp.Border),
-			float64(w+scrp.Border),
-			float64(b.Dy()+scrp.Border),
-			ColorBlackTransparent,
-		)
-		scrp.PrintAt(0b0001, s)
-	}
-}
-
-func SaveOneGif(encoder *gif.StreamEncoder, img *image.RGBA, delay int) *Task[Void] {
-	task := &Task[Void]{}
-	go func() {
-		defer task.Finish()
-
-		quantizer := quantize.MedianCutQuantizer{}
-		emptyPalette := make([]color.Color, 0, 256)
-		pal := quantizer.Quantize(emptyPalette, img)
-
-		palleted := image.NewPaletted(img.Rect, pal)
-		draw.Src.Draw(palleted, img.Bounds(), img, image.Point{})
-
-		encoder.Encode(palleted, delay, gif.DisposalNone)
-	}()
-
-	return task
 }

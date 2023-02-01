@@ -14,6 +14,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/nvlled/screen-ebi/framerate"
 	"github.com/sqweek/dialog"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -43,6 +44,7 @@ type Game struct {
 
 	capturer    Capturer
 	gifCapturer *GifCapturer
+	pngCapturer *PngCapturer
 
 	borderOnly  bool
 	borderLight color.Color
@@ -56,6 +58,7 @@ func NewGame() *Game {
 		scrp:        NewScreenPrint(),
 	}
 	game.gifCapturer = NewGifCapturer(game)
+	game.pngCapturer = NewPngCapturer(game)
 	return game
 }
 
@@ -78,7 +81,7 @@ func (g *Game) Update() error {
 		filter := g.settings.OutputType.String()
 		filename, err := dialog.File().
 			Filter(filter, filter).
-			SetStartFile(g.outputFilename).
+			//SetStartFile(g.outputFilename).
 			Save()
 		if err != nil && err != dialog.ErrCancelled {
 			g.setError(err)
@@ -237,7 +240,7 @@ func (g *Game) loadSettings() {
 			W: w,
 			H: h,
 		},
-		FPS: defaultFPS,
+		FrameRate: defaultFrameRate,
 	}
 
 	g.outputFilename = g.settings.OutputFilename
@@ -346,22 +349,20 @@ func (g *Game) onSettingsChanged() {
 	ebiten.SetWindowTitle(fmt.Sprintf("%v %vx%v", WindowTitle, wr.W, wr.H))
 }
 
-func (g *Game) getNextOutFilename() string {
+func (g *Game) getNextOutFilename() (string, int) {
 	outputFilename := g.settings.OutputFilename
 	if g.settings.OutputMethod != OutputMethodNewFile {
-		return outputFilename
+		return outputFilename, 0
 	}
 	_, err := os.Stat(outputFilename)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			g.logError(err)
 		}
-		return outputFilename
+		return outputFilename, 0
 	}
 
-	result := NextLatestIncrementedFilename(outputFilename)
-
-	return result
+	return NextLatestIncrementedFilename(outputFilename)
 }
 
 func (g *Game) logError(err error) {
@@ -379,8 +380,31 @@ func (g *Game) setOutputType(outputType OutputType) {
 	switch outputType {
 	case OutputTypeGif:
 		g.capturer = g.gifCapturer
+	case OutputTypePng:
+		g.capturer = g.pngCapturer
 	default:
 		g.capturer = nil
+	}
+	g.adjustFrameRate()
+}
+
+func (g *Game) adjustFrameRate() {
+	s := &g.settings
+	unit := g.settings.FrameRate.Unit
+	switch g.settings.OutputType {
+	case OutputTypeGif:
+		if unit != framerate.UnitSecond {
+			s.FrameRate = defaultFrameRate
+		}
+		if s.FrameRate.Value > 30 {
+			s.FrameRate.Value = 30
+		}
+	case OutputTypePng:
+		if s.FrameRate.Value > 30 && s.FrameRate.Unit == framerate.UnitSecond {
+			s.FrameRate.Value = 30
+		} else if s.FrameRate.Value > 60 {
+			s.FrameRate.Value = 60
+		}
 	}
 }
 
