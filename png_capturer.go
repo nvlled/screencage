@@ -14,7 +14,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
-	"github.com/nvlled/screen-ebi/framerate"
+	"github.com/nvlled/screencage/framerate"
 )
 
 type PngCapturer struct {
@@ -101,29 +101,34 @@ func SaveOnePng(filename string, img *image.RGBA) *Task[Void] {
 
 func (capturer *PngCapturer) coroutine(ctrl *carrot.Control) {
 START:
-	println("* inactive")
-	capturer.game.borderLight = ColorTeal
-	capturer.game.borderDark = ColorTealDark
-	capturer.running.Store(false)
-	capturer.draw = capturer.drawInactive
-	capturer.numImages = 0
-	capturer.numProcessed = 0
-
 	for {
-		if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
-			capturer.Err = capturer.startSingleScreenShot(ctrl)
-			break
-		} else if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-			capturer.Err = capturer.startMultiScreenShot(ctrl)
-			break
-		}
-		if capturer.Err != nil {
-			goto ERROR
+		println("* inactive")
+		capturer.game.borderLight = ColorTeal
+		capturer.game.borderDark = ColorTealDark
+		capturer.running.Store(false)
+		capturer.draw = capturer.drawInactive
+		capturer.numImages = 0
+		capturer.numProcessed = 0
+
+		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			ctrl.Yield()
 		}
 
-		ctrl.Yield()
+		for {
+			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
+				capturer.Err = capturer.startSingleScreenShot(ctrl)
+				break
+			} else if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+				capturer.Err = capturer.startMultiScreenShot(ctrl)
+				break
+			}
+			if capturer.Err != nil {
+				goto ERROR
+			}
+
+			ctrl.Yield()
+		}
 	}
-	goto START
 
 ERROR:
 	println("error", capturer.Err.Error())
@@ -248,10 +253,10 @@ func (capturer *PngCapturer) startMultiScreenShot(ctrl *carrot.Control) error {
 		capturer.draw = capturer.drawSaved
 		now := time.Now()
 		for {
+			ctrl.Yield()
 			if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || time.Since(now).Seconds() > 2 {
 				break
 			}
-			ctrl.Yield()
 		}
 	}
 
@@ -291,17 +296,16 @@ func (capturer *PngCapturer) Update() {
 		if ebiten.IsKeyPressed(ebiten.KeyShift) {
 			stepSize = 10
 		}
-		if inpututil.IsKeyJustPressed(ebiten.KeyMinus) {
+		if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
 			s.FrameRate.Value -= stepSize
 			capturer.game.scheduleSaveSettings()
-		} else if inpututil.IsKeyJustPressed(ebiten.KeyEqual) {
+		} else if inpututil.IsKeyJustPressed(ebiten.KeyUp) {
 			s.FrameRate.Value += stepSize
 			capturer.game.scheduleSaveSettings()
 		}
 		s.FrameRate.Clamp(1, 30)
 
 		if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
-			println("x")
 			s.FrameRate.Unit = (s.FrameRate.Unit + 1) % framerate.Unit_End
 		}
 	}
@@ -319,7 +323,8 @@ func (capturer *PngCapturer) drawInactive(screen *ebiten.Image) {
 	scrp.Font = capturer.game.smallFont
 	scrp.Println("\n\n")
 	scrp.Printf("rate: %v", s.FrameRate.String())
-	scrp.Printf("controls: optional [shift] with [-][+] | [backspace]")
+	scrp.Printf("controls: [up][down] or [backspace]")
+	scrp.Printf("shift can be used [up][down]")
 	scrp.Font = capturer.game.tinyFont
 
 	scrp.Println("\n\n")

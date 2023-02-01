@@ -9,12 +9,13 @@ import (
 	"log"
 	"os"
 	"runtime/debug"
+	"strings"
 
 	"github.com/hajimehoshi/ebiten/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/nvlled/screen-ebi/framerate"
+	"github.com/nvlled/screencage/framerate"
 	"github.com/sqweek/dialog"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -53,8 +54,8 @@ type Game struct {
 
 func NewGame() *Game {
 	game := &Game{
-		borderLight: ColorBlue,
-		borderDark:  ColorBlueDark,
+		borderLight: ColorTeal,
+		borderDark:  ColorTealDark,
 		scrp:        NewScreenPrint(),
 	}
 	game.gifCapturer = NewGifCapturer(game)
@@ -69,10 +70,6 @@ func (g *Game) Update() error {
 		g.onSettingsChanged()
 	}
 
-	if ebiten.IsKeyPressed(ebiten.KeyEscape) {
-		os.Exit(0)
-	}
-
 	if inpututil.IsKeyJustPressed(ebiten.KeyF10) {
 		g.borderOnly = !g.borderOnly
 	}
@@ -81,7 +78,6 @@ func (g *Game) Update() error {
 		filter := g.settings.OutputType.String()
 		filename, err := dialog.File().
 			Filter(filter, filter).
-			//SetStartFile(g.outputFilename).
 			Save()
 		if err != nil && err != dialog.ErrCancelled {
 			g.setError(err)
@@ -115,40 +111,40 @@ func (g *Game) Update() error {
 	return nil
 }
 
-// TODO:
-//	func drawLineX(screen, dot, x, y, w int) {
-//		op := ebiten.GeoM{}
-//		op.Scale(sw, 1)
-//		screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
-//			GeoM: op,
-//		})
-//	}
-
-func drawLineY(screen, dot, x, y, h int) {
-
-}
-
 func (g *Game) drawBorder(screen *ebiten.Image) {
 	b := screen.Bounds()
 
 	sw, sh := float64(b.Dx()-1), float64(b.Dy()-1)
+	colors := []*ebiten.Image{lightBorderImage, darkBorderImage}
 
-	op := ebiten.GeoM{}
-	op.Scale(sw, 1)
-	screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
-		GeoM: op,
-	})
-	op.Reset()
-	op.Scale(1, sh)
-	screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
-		GeoM: op,
-	})
-	op.Reset()
-	op.Scale(sw, 1)
-	op.Translate(0, sh-1)
-	screen.DrawImage(lightBorderImage, &ebiten.DrawImageOptions{
-		GeoM: op,
-	})
+	for i, c := range colors {
+		_ = i
+		n := float64(i)
+		op := ebiten.GeoM{}
+		op.Scale(sw-n, 1)
+		op.Translate(n, n)
+		screen.DrawImage(c, &ebiten.DrawImageOptions{
+			GeoM: op,
+		})
+		op.Reset()
+		op.Scale(1, sh-n)
+		op.Translate(n, n)
+		screen.DrawImage(c, &ebiten.DrawImageOptions{
+			GeoM: op,
+		})
+		op.Reset()
+		op.Scale(sw-n, 1)
+		op.Translate(n, sh-n)
+		screen.DrawImage(c, &ebiten.DrawImageOptions{
+			GeoM: op,
+		})
+		op.Reset()
+		op.Scale(1, sh-n)
+		op.Translate(sw-n, n)
+		screen.DrawImage(c, &ebiten.DrawImageOptions{
+			GeoM: op,
+		})
+	}
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -209,6 +205,11 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeigh
 }
 
 func (g *Game) Init() {
+	lightBorderImage = ebiten.NewImage(1, 1)
+	lightBorderImage.Set(0, 0, g.borderLight)
+	darkBorderImage = ebiten.NewImage(1, 1)
+	darkBorderImage.Set(0, 0, g.borderDark)
+
 	g.settingFilename = defaultSettingsFile
 
 	g.loadSettings()
@@ -245,9 +246,7 @@ func (g *Game) loadSettings() {
 
 	g.outputFilename = g.settings.OutputFilename
 
-	if os.Getenv("screenebi_config") != "" {
-		g.settingFilename = os.Getenv("screenebi_config")
-	}
+	g.parseArgs()
 
 	file, err := os.Open(g.settingFilename)
 	if err != nil {
@@ -282,6 +281,41 @@ func (g *Game) loadSettings() {
 
 func (g *Game) scheduleSaveSettings() {
 	g.mustSaveSettings = true
+}
+
+func (g *Game) parseArgs() {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		opt := args[i]
+		if opt == "" {
+			continue
+		}
+		if opt[0] != '-' {
+			fmt.Printf("unknown option: %v\n", opt)
+			os.Exit(1)
+		}
+
+		if i >= len(args)-1 {
+			fmt.Printf("invalid option: %v needs a paramter\n", opt)
+			os.Exit(1)
+		}
+
+		for len(opt) > 0 && opt[0] == '-' {
+			opt = strings.TrimPrefix(opt, "-")
+		}
+
+		val := args[i+1]
+		i++
+
+		switch opt {
+		case "config":
+			g.settingFilename = val
+		//case "filename":
+		//  TODO: or maybe not
+		default:
+			fmt.Printf("unknown option: %v\n", opt)
+		}
+	}
 }
 
 func (g *Game) saveSettings() {
@@ -409,9 +443,6 @@ func (g *Game) adjustFrameRate() {
 }
 
 func main() {
-	//ebiten.SetFPSMode(ebiten.FPSModeVsyncOffMinimum)
-
-	//ebiten.SetWindowFloating(true)
 	ebiten.SetTPS(30)
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.SetWindowDecorated(false)
@@ -422,25 +453,7 @@ func main() {
 	game := NewGame()
 	game.Init()
 
-	lightBorderImage = ebiten.NewImage(1, 1)
-	lightBorderImage.Set(0, 0, game.borderLight)
-
-	darkBorderImage = ebiten.NewImage(1, 1)
-	darkBorderImage.Set(0, 0, game.borderDark)
-
 	if err := ebiten.RunGame(game); err != nil {
 		log.Fatal(err)
 	}
 }
-
-/*
-
-TODO:
-
-type PngCapturer struct {}
-
-*/
-
-// TODO: don't use env for getting cli arguments
-// TODO: fix capturer bounds and border offset
-//       also, I should not use ebitenutil.DrawLine

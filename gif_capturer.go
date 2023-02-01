@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
@@ -11,12 +10,11 @@ import (
 
 	"github.com/ericpauley/go-quantize/quantize"
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/hajimehoshi/ebiten/v2/text"
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
 	gif "github.com/nvlled/gogif"
+	"github.com/nvlled/screencage/framerate"
 )
 
 type GifCapturer struct {
@@ -65,13 +63,20 @@ START:
 		capturer.numProcessed = 0
 
 		if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-			capturer.Err = capturer.startRecording(ctrl)
-		}
-		if capturer.Err != nil {
-			goto ERROR
+			ctrl.Yield()
 		}
 
-		ctrl.Yield()
+		for {
+			if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+				capturer.Err = capturer.startRecording(ctrl)
+				break
+			}
+			if capturer.Err != nil {
+				goto ERROR
+			}
+
+			ctrl.Yield()
+		}
 	}
 
 ERROR:
@@ -135,7 +140,6 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 				}
 
 				capturer.numProcessed++
-				println("* saved", capturer.numProcessed)
 			}
 		})
 
@@ -183,10 +187,10 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 		capturer.draw = capturer.drawSaved
 		now := time.Now()
 		for {
+			ctrl.Yield()
 			if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || time.Since(now).Seconds() > 2 {
 				break
 			}
-			ctrl.Yield()
 		}
 	}
 
@@ -206,8 +210,11 @@ func (capturer *GifCapturer) startScreenShotLoop(queue *Queue[GifFrame], ctrl *c
 		}
 
 		delay := int(time.Since(lastShot).Milliseconds() / 10)
+		if delay > 500 {
+			delay = 500
+		}
 		capturer.numImages++
-		println("* screenshot", capturer.numImages)
+		println("* screenshot", capturer.numImages, delay)
 
 		queue.Push(GifFrame{Image: img, CsDelay: delay})
 		lastShot = time.Now()
@@ -229,14 +236,18 @@ func (capturer *GifCapturer) Update() {
 		if ebiten.IsKeyPressed(ebiten.KeyShift) {
 			stepSize = 10
 		}
-		if inpututil.IsKeyJustPressed(ebiten.KeyMinus) {
+		if inpututil.IsKeyJustPressed(ebiten.KeyDown) {
 			s.FrameRate.Value -= stepSize
 			capturer.game.scheduleSaveSettings()
-		} else if inpututil.IsKeyJustPressed(ebiten.KeyEqual) {
+		} else if inpututil.IsKeyJustPressed(ebiten.KeyUp) {
 			s.FrameRate.Value += stepSize
 			capturer.game.scheduleSaveSettings()
 		}
 		s.FrameRate.Clamp(1, 30)
+
+		if inpututil.IsKeyJustPressed(ebiten.KeyBackspace) {
+			s.FrameRate.Unit = (s.FrameRate.Unit + 1) % framerate.Unit_End
+		}
 	}
 }
 
@@ -251,7 +262,8 @@ func (capturer *GifCapturer) drawInactive(screen *ebiten.Image) {
 	scrp.Font = capturer.game.smallFont
 	scrp.Println("\n\n")
 	scrp.Printf("rate: %v", s.FrameRate.String())
-	scrp.Printf("controls: optional [shift] with [-][+]")
+	scrp.Printf("controls: [up][down] or [backspace]")
+	scrp.Printf("shift can be used [up][down]")
 	scrp.Font = capturer.game.tinyFont
 
 	scrp.Println("\n\n")
@@ -311,24 +323,26 @@ func (capturer *GifCapturer) Draw(screen *ebiten.Image) {
 		capturer.draw(screen)
 	}
 
-	if capturer.game.borderOnly && capturer.running.Load() {
-		scrp.Font = capturer.game.tinyFont
-		_, h := ebiten.WindowSize()
+	/*
+		if capturer.game.borderOnly && capturer.running.Load() {
+			scrp.Font = capturer.game.tinyFont
+			_, h := ebiten.WindowSize()
 
-		s := fmt.Sprintf("%v", capturer.numImages)
-		b := text.BoundString(scrp.Font, "9")
-		w := b.Dx() * len(s)
+			s := fmt.Sprintf("%v", capturer.numImages)
+			b := text.BoundString(scrp.Font, "9")
+			w := b.Dx() * len(s)
 
-		ebitenutil.DrawRect(
-			screen,
-			float64(0),
-			float64(h-b.Dy()-scrp.Border),
-			float64(w+scrp.Border),
-			float64(b.Dy()+scrp.Border),
-			ColorBlackTransparent,
-		)
-		scrp.PrintAt(0b0001, s)
-	}
+			ebitenutil.DrawRect(
+				screen,
+				float64(0),
+				float64(h-b.Dy()-scrp.Border),
+				float64(w+scrp.Border),
+				float64(b.Dy()+scrp.Border),
+				ColorBlackTransparent,
+			)
+			scrp.PrintAt(0b0001, s)
+		}
+	*/
 }
 
 func SaveOneGif(encoder *gif.StreamEncoder, img *image.RGBA, delay int) *Task[Void] {

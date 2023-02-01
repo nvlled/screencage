@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -25,15 +24,6 @@ func TestIncrementFilename(t *testing.T) {
 		}
 	}
 }
-func TestGrowSlice(t *testing.T) {
-	xs := []int{0, 0, 0, 1, 2, 3, 4}
-	ys := growSlice(xs, 3)
-	fmt.Printf("%v\n", ys)
-
-	xs = []int{7, 8, 9, 1, 2, 3, 4}
-	ys = growSlice(xs, 2)
-	fmt.Printf("%v\n", ys)
-}
 
 func TestQueueSizes(t *testing.T) {
 	q := CreateQueue[int](3)
@@ -47,7 +37,6 @@ func TestQueueSizes(t *testing.T) {
 	}
 	q.Push(3)
 	if q.Size() != 3 {
-		fmt.Printf("+%v\n", q)
 		t.Errorf("wrong size, expected=%v, got=%v", 3, q.Size())
 	}
 
@@ -60,10 +49,8 @@ func TestQueueSizes(t *testing.T) {
 	q.Push(1)
 	q.Push(2)
 	if q.Size() != 2 {
-		fmt.Printf("+%v\n", q)
 		t.Errorf("wrong size, expected=%v, got=%v", 2, q.Size())
 	}
-	fmt.Printf("+%v\n", q)
 }
 
 func TestQueue(t *testing.T) {
@@ -124,20 +111,4 @@ func TestQueue(t *testing.T) {
 	if q.Size() != 0 {
 		t.Errorf("wrong size")
 	}
-}
-
-func TestFpsConversion(t *testing.T) {
-	fps := FramesPerMinute / 30
-	d := getFrameDuration(fps)
-	fmt.Printf("seconds: %v\n", d.Seconds())
-	step := getFrameStepSize(fps)
-	fmt.Printf("stepSize: %v\n", step)
-
-	for i := 0; i < 30; i++ {
-		step := getFrameStepSize(fps)
-		fps += step
-		d = getFrameDuration(fps)
-		fmt.Printf("fps=%v | %v\n", fps, d.Seconds())
-	}
-
 }

@@ -1,4 +1,4 @@
-module github.com/nvlled/screen-ebi
+module github.com/nvlled/screencage
 
 go 1.19
 
