@@ -1,4 +1,4 @@
-package main
+package screencage
 
 import (
 	"image"
@@ -31,7 +31,7 @@ type PngCapturer struct {
 
 	script *carrot.Script
 
-	game *Game
+	game *App
 	scrp *ScreenPrint
 
 	lastDraw int64
@@ -39,7 +39,7 @@ type PngCapturer struct {
 	Err error
 }
 
-func NewPngCapturer(game *Game) *PngCapturer {
+func NewPngCapturer(game *App) *PngCapturer {
 	capturer := &PngCapturer{
 		game: game,
 		scrp: game.scrp,

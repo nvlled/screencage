@@ -1,4 +1,4 @@
-package main
+package screencage
 
 import (
 	"github.com/nvlled/screencage/framerate"

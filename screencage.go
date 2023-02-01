@@ -1,4 +1,4 @@
-package main
+package screencage
 
 import (
 	"encoding/json"
@@ -24,9 +24,9 @@ import (
 var lightBorderImage *ebiten.Image
 var darkBorderImage *ebiten.Image
 
-var WindowTitle = "screen capture"
+var WindowTitle = "screencage"
 
-type Game struct {
+type App struct {
 	tickCounter int
 
 	regularFont font.Face
@@ -52,8 +52,8 @@ type Game struct {
 	borderDark  color.Color
 }
 
-func NewGame() *Game {
-	game := &Game{
+func NewGame() *App {
+	game := &App{
 		borderLight: ColorTeal,
 		borderDark:  ColorTealDark,
 		scrp:        NewScreenPrint(),
@@ -63,7 +63,7 @@ func NewGame() *Game {
 	return game
 }
 
-func (g *Game) Update() error {
+func (g *App) Update() error {
 	g.tickCounter++
 
 	if g.mustSaveSettings && g.tickCounter%50 == 0 { // throttle by 50 frames
@@ -111,7 +111,7 @@ func (g *Game) Update() error {
 	return nil
 }
 
-func (g *Game) drawBorder(screen *ebiten.Image) {
+func (g *App) drawBorder(screen *ebiten.Image) {
 	b := screen.Bounds()
 
 	sw, sh := float64(b.Dx()-1), float64(b.Dy()-1)
@@ -147,7 +147,7 @@ func (g *Game) drawBorder(screen *ebiten.Image) {
 	}
 }
 
-func (g *Game) Draw(screen *ebiten.Image) {
+func (g *App) Draw(screen *ebiten.Image) {
 	g.scrp.Reset(screen)
 
 	if !g.borderOnly {
@@ -189,7 +189,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 }
 
-func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
+func (g *App) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
 	wr := &g.settings.WindowRect
 	x, y := ebiten.WindowPosition()
 
@@ -204,7 +204,7 @@ func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeigh
 	return outsideWidth, outsideHeight
 }
 
-func (g *Game) Init() {
+func (g *App) Init() {
 	lightBorderImage = ebiten.NewImage(1, 1)
 	lightBorderImage.Set(0, 0, g.borderLight)
 	darkBorderImage = ebiten.NewImage(1, 1)
@@ -228,7 +228,7 @@ func (g *Game) Init() {
 	g.scrp.LineSpacing = 10
 }
 
-func (g *Game) loadSettings() {
+func (g *App) loadSettings() {
 	w, h := ebiten.ScreenSizeInFullscreen()
 	outputType := defaultOutputType
 	g.settings = Settings{
@@ -279,11 +279,11 @@ func (g *Game) loadSettings() {
 	g.outputFilename = g.settings.OutputFilename
 }
 
-func (g *Game) scheduleSaveSettings() {
+func (g *App) scheduleSaveSettings() {
 	g.mustSaveSettings = true
 }
 
-func (g *Game) parseArgs() {
+func (g *App) parseArgs() {
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		opt := args[i]
@@ -318,7 +318,7 @@ func (g *Game) parseArgs() {
 	}
 }
 
-func (g *Game) saveSettings() {
+func (g *App) saveSettings() {
 	file, err := os.OpenFile(g.settingFilename, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		g.setError(err)
@@ -333,7 +333,7 @@ func (g *Game) saveSettings() {
 	}
 }
 
-func (g *Game) loadFonts() {
+func (g *App) loadFonts() {
 	tt, err := opentype.Parse(fonts.MPlus1pRegular_ttf)
 	if err != nil {
 		log.Fatal(err)
@@ -369,13 +369,13 @@ func (g *Game) loadFonts() {
 	g.tinyFont = tinyFont
 }
 
-func (g *Game) setError(err error) {
+func (g *App) setError(err error) {
 	g.err = err
 	println("error:", err.Error())
 	debug.PrintStack()
 }
 
-func (g *Game) onSettingsChanged() {
+func (g *App) onSettingsChanged() {
 	println("settings changed")
 	wr := &g.settings.WindowRect
 	g.saveSettings()
@@ -383,7 +383,7 @@ func (g *Game) onSettingsChanged() {
 	ebiten.SetWindowTitle(fmt.Sprintf("%v %vx%v", WindowTitle, wr.W, wr.H))
 }
 
-func (g *Game) getNextOutFilename() (string, int) {
+func (g *App) getNextOutFilename() (string, int) {
 	outputFilename := g.settings.OutputFilename
 	if g.settings.OutputMethod != OutputMethodNewFile {
 		return outputFilename, 0
@@ -399,12 +399,12 @@ func (g *Game) getNextOutFilename() (string, int) {
 	return NextLatestIncrementedFilename(outputFilename)
 }
 
-func (g *Game) logError(err error) {
+func (g *App) logError(err error) {
 	log.Println(err)
 	debug.PrintStack()
 }
 
-func (g *Game) setOutputType(outputType OutputType) {
+func (g *App) setOutputType(outputType OutputType) {
 	s := &g.settings
 	s.OutputType = outputType
 	filename, _ := TrimExt(s.OutputFilename)
@@ -422,7 +422,7 @@ func (g *Game) setOutputType(outputType OutputType) {
 	g.adjustFrameRate()
 }
 
-func (g *Game) adjustFrameRate() {
+func (g *App) adjustFrameRate() {
 	s := &g.settings
 	unit := g.settings.FrameRate.Unit
 	switch g.settings.OutputType {
@@ -439,21 +439,5 @@ func (g *Game) adjustFrameRate() {
 		} else if s.FrameRate.Value > 60 {
 			s.FrameRate.Value = 60
 		}
-	}
-}
-
-func main() {
-	ebiten.SetTPS(30)
-	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
-	ebiten.SetWindowDecorated(false)
-	ebiten.SetScreenTransparent(true)
-	ebiten.SetWindowSize(640, 480)
-	ebiten.SetWindowTitle("screen capture")
-
-	game := NewGame()
-	game.Init()
-
-	if err := ebiten.RunGame(game); err != nil {
-		log.Fatal(err)
 	}
 }

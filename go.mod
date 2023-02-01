@@ -8,8 +8,8 @@ require (
 	github.com/hajimehoshi/ebiten/v2 v2.4.16
 	github.com/kbinani/screenshot v0.0.0-20210720154843-7d3a670d8329
 	github.com/nvlled/carrot v0.6.0
+	github.com/nvlled/gogif v0.0.0-20230130043423-5a1e0be569fe
 	github.com/sqweek/dialog v0.0.0-20220809060634-e981b270ebbf
-	github.com/xyproto/palgen v1.2.0
 	golang.org/x/image v0.1.0
 )
 
@@ -20,9 +20,7 @@ require (
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20220806181222-55e207c401ad // indirect
 	github.com/hajimehoshi/file2byteslice v0.0.0-20210813153925-5340248a8f41 // indirect
 	github.com/jezek/xgb v1.0.1 // indirect
-	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/lxn/win v0.0.0-20210218163916-a377121e959e // indirect
-	github.com/nvlled/gogif v0.0.0-20230130043423-5a1e0be569fe // indirect
 	github.com/nvlled/mud v0.2.0 // indirect
 	golang.org/x/exp v0.0.0-20221217163422-3c43f8badb15 // indirect
 	golang.org/x/exp/shiny v0.0.0-20230118134722-a68e582fa157 // indirect

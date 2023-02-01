@@ -1,4 +1,4 @@
-package main
+package screencage
 
 import (
 	"image"
@@ -29,7 +29,7 @@ type GifCapturer struct {
 
 	script *carrot.Script
 
-	game *Game
+	game *App
 	scrp *ScreenPrint
 
 	lastDraw int64
@@ -37,7 +37,7 @@ type GifCapturer struct {
 	Err error
 }
 
-func NewGifCapturer(game *Game) *GifCapturer {
+func NewGifCapturer(game *App) *GifCapturer {
 	capturer := &GifCapturer{
 		game: game,
 		scrp: game.scrp,
