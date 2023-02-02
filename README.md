@@ -4,8 +4,8 @@ A graphical screen capture tool that uses the
 window position and size to select part of the screen to
 capture.
 
-![1FPS demo](demo.gif)
-**Note: demo is 1 FPS to save file size**
+![demo](demo2.gif)
+**Note: some files have low FPS to save file size**
 
 ## Primary packages/libraries used
 
@@ -26,4 +26,10 @@ If you get some errors, check the system dependencies
 for each packages/libraries listed above, and then retry again.
 I'm a bit lazy right now, but I should directly list the dependencies here.
 
-Note: tested only on Ubuntu/linux
+## Running
+
+```
+$ screencage # uses default config
+$ screencage -config work.json
+$ screencage -config procrast.json
+```
