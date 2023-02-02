@@ -1,4 +1,4 @@
-package screencage
+package lib
 
 import (
 	"encoding/json"
@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 
@@ -15,7 +16,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
-	"github.com/nvlled/screencage/framerate"
+	"github.com/nvlled/screencage/lib/framerate"
 	"github.com/sqweek/dialog"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -210,7 +211,15 @@ func (g *App) Init() {
 	darkBorderImage = ebiten.NewImage(1, 1)
 	darkBorderImage.Set(0, 0, g.borderDark)
 
-	g.settingFilename = defaultSettingsFile
+	{
+		filename := filepath.Join(defaultSettingsFile)
+		binPath, err := os.Executable()
+		if err == nil {
+			binDir := filepath.Dir(binPath)
+			filename = filepath.Join(binDir, defaultSettingsFile)
+		}
+		g.settingFilename = filename
+	}
 
 	g.loadSettings()
 	g.setOutputType(g.settings.OutputType)

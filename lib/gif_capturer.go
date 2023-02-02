@@ -1,4 +1,4 @@
-package screencage
+package lib
 
 import (
 	"image"
@@ -14,7 +14,7 @@ import (
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
 	gif "github.com/nvlled/gogif"
-	"github.com/nvlled/screencage/framerate"
+	"github.com/nvlled/screencage/lib/framerate"
 )
 
 type GifCapturer struct {

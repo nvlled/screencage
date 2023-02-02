@@ -1,7 +1,7 @@
-package screencage
+package lib
 
 import (
-	"github.com/nvlled/screencage/framerate"
+	"github.com/nvlled/screencage/lib/framerate"
 )
 
 type Settings struct {

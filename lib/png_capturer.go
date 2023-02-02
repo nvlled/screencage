@@ -1,4 +1,4 @@
-package screencage
+package lib
 
 import (
 	"image"
@@ -14,7 +14,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/kbinani/screenshot"
 	"github.com/nvlled/carrot"
-	"github.com/nvlled/screencage/framerate"
+	"github.com/nvlled/screencage/lib/framerate"
 )
 
 type PngCapturer struct {

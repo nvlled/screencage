@@ -4,7 +4,7 @@ import (
 	"log"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/nvlled/screencage"
+	"github.com/nvlled/screencage/lib"
 )
 
 func main() {
@@ -15,7 +15,7 @@ func main() {
 	ebiten.SetWindowSize(640, 480)
 	ebiten.SetWindowTitle("screen capture")
 
-	game := screencage.NewGame()
+	game := lib.NewGame()
 	game.Init()
 
 	if err := ebiten.RunGame(game); err != nil {
