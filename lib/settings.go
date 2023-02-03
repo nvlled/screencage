@@ -9,6 +9,9 @@ type Settings struct {
 	OutputType     OutputType   `json:"outputType"`
 	OutputMethod   OutputMethod `json:"outputMethod"`
 
+	// I use this for customized window settings in KDE
+	WindowTitle string `json:"windowTitle"`
+
 	CaptureRate CaptureRate
 
 	WindowRect Rect `json:"windowRect"`
@@ -30,6 +33,8 @@ type Rect struct {
 	H int
 }
 
+var defaultFrameRate = framerate.T{Value: 5, Unit: framerate.UnitSecond}
+
 const (
 	defaultSettingsFile  = "screencage.json"
 	defaultOutputFileMp4 = "capture.mp4"
@@ -37,7 +42,7 @@ const (
 	defaultOutputFilePng = "capture.png"
 )
 
-var defaultFrameRate = framerate.T{Value: 5, Unit: framerate.UnitSecond}
+const DefaultWindowTitle = "screencage"
 
 const defaultOutputType = OutputTypeGif
 

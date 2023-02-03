@@ -25,8 +25,6 @@ import (
 var lightBorderImage *ebiten.Image
 var darkBorderImage *ebiten.Image
 
-var WindowTitle = "screencage"
-
 type App struct {
 	tickCounter int
 
@@ -51,6 +49,9 @@ type App struct {
 	borderOnly  bool
 	borderLight color.Color
 	borderDark  color.Color
+
+	autoStart    bool
+	exitOnFinish bool
 }
 
 func NewGame() *App {
@@ -222,12 +223,12 @@ func (g *App) Init() {
 	}
 
 	g.loadSettings()
+	g.updateWindowTitle()
 	g.setOutputType(g.settings.OutputType)
 
 	wr := g.settings.WindowRect
 	ebiten.SetWindowPosition(wr.X, wr.Y)
 	ebiten.SetWindowSize(wr.W, wr.H)
-	fmt.Printf("%+v\n", wr)
 
 	g.loadFonts()
 	g.scrp.Font = g.regularFont
@@ -235,6 +236,7 @@ func (g *App) Init() {
 	g.scrp.Border = 20
 	g.scrp.Color = color.White
 	g.scrp.LineSpacing = 10
+
 }
 
 func (g *App) loadSettings() {
@@ -254,7 +256,6 @@ func (g *App) loadSettings() {
 	}
 
 	g.outputFilename = g.settings.OutputFilename
-
 	g.parseArgs()
 
 	file, err := os.Open(g.settingFilename)
@@ -319,8 +320,12 @@ func (g *App) parseArgs() {
 		switch opt {
 		case "config":
 			g.settingFilename = val
-		//case "filename":
-		//  TODO: or maybe not
+		case "window-title":
+			g.settings.WindowTitle = val
+		case "autostart":
+			g.autoStart = true
+		case "exit-on-finish":
+			g.exitOnFinish = true
 		default:
 			fmt.Printf("unknown option: %v\n", opt)
 		}
@@ -380,16 +385,21 @@ func (g *App) loadFonts() {
 
 func (g *App) setError(err error) {
 	g.err = err
-	println("error:", err.Error())
+	log.Println("error:", err.Error())
 	debug.PrintStack()
 }
 
 func (g *App) onSettingsChanged() {
-	println("settings changed")
-	wr := &g.settings.WindowRect
+	log.Println("settings changed")
 	g.saveSettings()
 	g.mustSaveSettings = false
-	ebiten.SetWindowTitle(fmt.Sprintf("%v %vx%v", WindowTitle, wr.W, wr.H))
+	g.updateWindowTitle()
+}
+
+func (g *App) updateWindowTitle() {
+	wr := &g.settings.WindowRect
+	title := g.settings.WindowTitle
+	ebiten.SetWindowTitle(fmt.Sprintf("%v %vx%v", title, wr.W, wr.H))
 }
 
 func (g *App) getNextOutFilename() (string, int) {

@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"log"
 	"os"
 	"sync/atomic"
 	"time"
@@ -54,7 +55,7 @@ type GifFrame struct {
 func (capturer *GifCapturer) coroutine(ctrl *carrot.Control) {
 START:
 	for {
-		println("* inactive")
+		log.Println("* inactive")
 		capturer.game.borderLight = ColorTeal
 		capturer.game.borderDark = ColorTealDark
 		capturer.running.Store(false)
@@ -67,8 +68,15 @@ START:
 		}
 
 		for {
-			if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+			if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || capturer.game.autoStart {
+				capturer.game.autoStart = false
 				capturer.Err = capturer.startRecording(ctrl)
+
+				if capturer.game.exitOnFinish {
+					println(capturer.saveFilename)
+					os.Exit(0)
+				}
+
 				break
 			}
 			if capturer.Err != nil {
@@ -80,7 +88,7 @@ START:
 	}
 
 ERROR:
-	println("error", capturer.Err.Error())
+	log.Println("error", capturer.Err.Error())
 	capturer.draw = capturer.drawError
 	awaitEnter(ctrl)
 	capturer.Err = nil
@@ -102,7 +110,7 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 
 	// recording
 	var encodingCtrl carrot.SubControl
-	println("* start recording")
+	log.Println("* start recording")
 	{
 		capturer.numImages = 0
 		capturer.numProcessed = 0
@@ -163,7 +171,7 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 	}
 
 	// saving
-	println("* saving")
+	log.Println("* saving")
 	{
 		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 		capturer.game.borderOnly = false
@@ -182,7 +190,7 @@ func (capturer *GifCapturer) startRecording(ctrl *carrot.Control) error {
 	}
 
 	// saved
-	println("* saved")
+	log.Println("* saved")
 	{
 		capturer.draw = capturer.drawSaved
 		now := time.Now()
@@ -214,7 +222,7 @@ func (capturer *GifCapturer) startScreenShotLoop(queue *Queue[GifFrame], ctrl *c
 			delay = 500
 		}
 		capturer.numImages++
-		println("* screenshot", capturer.numImages, delay)
+		log.Println("* screenshot", capturer.numImages, delay)
 
 		queue.Push(GifFrame{Image: img, CsDelay: delay})
 		lastShot = time.Now()

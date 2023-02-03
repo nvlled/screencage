@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
+	"log"
 	"os"
 	"sync/atomic"
 	"time"
@@ -102,7 +103,7 @@ func SaveOnePng(filename string, img *image.RGBA) *Task[Void] {
 func (capturer *PngCapturer) coroutine(ctrl *carrot.Control) {
 START:
 	for {
-		println("* inactive")
+		log.Println("* inactive")
 		capturer.game.borderLight = ColorTeal
 		capturer.game.borderDark = ColorTealDark
 		capturer.running.Store(false)
@@ -115,15 +116,25 @@ START:
 		}
 
 		for {
+			hasShot := false
 			if inpututil.IsKeyJustPressed(ebiten.KeySpace) {
 				capturer.Err = capturer.startSingleScreenShot(ctrl)
-				break
-			} else if inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+				hasShot = true
+			} else if inpututil.IsKeyJustPressed(ebiten.KeyEnter) || capturer.game.autoStart {
+				capturer.game.autoStart = false
 				capturer.Err = capturer.startMultiScreenShot(ctrl)
-				break
+				hasShot = true
 			}
 			if capturer.Err != nil {
 				goto ERROR
+			}
+
+			if hasShot {
+				if capturer.game.exitOnFinish {
+					println(capturer.saveFilename)
+					os.Exit(0)
+				}
+				break
 			}
 
 			ctrl.Yield()
@@ -131,7 +142,7 @@ START:
 	}
 
 ERROR:
-	println("error", capturer.Err.Error())
+	log.Println("error", capturer.Err.Error())
 	capturer.draw = capturer.drawError
 	awaitEnter(ctrl)
 	capturer.Err = nil
@@ -141,13 +152,14 @@ ERROR:
 }
 
 func (capturer *PngCapturer) startSingleScreenShot(ctrl *carrot.Control) error {
-	println("starting screenshot")
+	log.Println("starting screenshot")
 	capturer.game.borderOnly = true
 	awaitNextDraw(ctrl, &capturer.lastDraw)
 
 	filename, _ := capturer.game.getNextOutFilename()
+	capturer.saveFilename = filename
 	task := ScreenshotAndSave(filename)
-	println("screenshot done")
+	log.Println("screenshot done")
 	ctrl.YieldUntil(task.IsDone)
 	capturer.game.borderOnly = false
 	if task.Err != nil {
@@ -169,7 +181,7 @@ func (capturer *PngCapturer) startMultiScreenShot(ctrl *carrot.Control) error {
 
 	var savingCtrl carrot.SubControl
 
-	println("* start recording")
+	log.Println("* start recording")
 	{
 		capturer.numImages = 0
 		capturer.numProcessed = 0
@@ -211,7 +223,7 @@ func (capturer *PngCapturer) startMultiScreenShot(ctrl *carrot.Control) error {
 				}
 
 				capturer.numProcessed++
-				println("* saved", capturer.numProcessed)
+				log.Println("* saved", capturer.numProcessed)
 			}
 		})
 
@@ -233,7 +245,7 @@ func (capturer *PngCapturer) startMultiScreenShot(ctrl *carrot.Control) error {
 		}
 	}
 
-	println("* saving")
+	log.Println("* saving")
 	{
 		ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 		capturer.game.borderOnly = false
@@ -248,7 +260,7 @@ func (capturer *PngCapturer) startMultiScreenShot(ctrl *carrot.Control) error {
 		}
 	}
 
-	println("* saved")
+	log.Println("* saved")
 	{
 		capturer.draw = capturer.drawSaved
 		now := time.Now()
@@ -275,7 +287,7 @@ func (capturer *PngCapturer) startCaptureLoop(queue *Queue[*image.RGBA], ctrl *c
 		}
 
 		capturer.numImages++
-		println("* screenshot", capturer.numImages)
+		log.Println("* screenshot", capturer.numImages)
 
 		queue.Push(img)
 		ctrl.Sleep(frameDuration)
